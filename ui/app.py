@@ -7,7 +7,6 @@ Displays:
   - Client selector (sidebar, persists across pages via st.session_state)
   - Summary cards: risk profile, total invested, current value, gain %
   - Quick links to all advisory pages
-  - Phase status banner
 
 Run:
   PYTHONPATH=/Users/manavgupta/financial_advisor streamlit run ui/app.py
@@ -15,11 +14,23 @@ Run:
 
 import sys
 import os
-sys.path.insert(0, os.environ.get("PYTHONPATH", "."))
+
+# Ensure repo root is on path (works locally via PYTHONPATH and on Cloud).
+_repo_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+if _repo_root not in sys.path:
+    sys.path.insert(0, _repo_root)
+# Fallback: also honour the legacy PYTHONPATH env var used locally.
+_pythonpath = os.environ.get("PYTHONPATH", "")
+if _pythonpath and _pythonpath not in sys.path:
+    sys.path.insert(0, _pythonpath)
 
 import streamlit as st
 import sqlite3
 from config.settings import DATABASE_PATH
+from data.database import init_db
+
+# ── Ensure DB + tables exist before any query ────────────────────────────────
+init_db()
 
 # ── Page config (must be first Streamlit call) ──────────────────────────────
 st.set_page_config(
@@ -32,12 +43,10 @@ st.set_page_config(
 # ── Shared CSS ───────────────────────────────────────────────────────────────
 st.markdown("""
 <style>
-  /* Inter for body, DM Serif Display for headlines */
   @import url('https://fonts.googleapis.com/css2?family=DM+Serif+Display&family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap');
 
   html, body, [class*="css"] { font-family: 'Inter', sans-serif; }
 
-  /* Sidebar */
   section[data-testid="stSidebar"] {
     background: #0D1117;
     border-right: 1px solid #21262D;
@@ -45,11 +54,9 @@ st.markdown("""
   section[data-testid="stSidebar"] * { color: #C9D1D9 !important; }
   section[data-testid="stSidebar"] .stSelectbox label { color: #8B949E !important; font-size: 0.75rem; text-transform: uppercase; letter-spacing: 0.08em; }
 
-  /* Main background */
   .main { background: #0D1117; }
   .block-container { padding: 2rem 2.5rem; }
 
-  /* Metric cards */
   .metric-card {
     background: #161B22;
     border: 1px solid #21262D;
@@ -80,15 +87,10 @@ st.markdown("""
     color: #E6EDF3;
     line-height: 1.1;
   }
-  .metric-sub {
-    font-size: 0.75rem;
-    color: #8B949E;
-    margin-top: 0.3rem;
-  }
+  .metric-sub { font-size: 0.75rem; color: #8B949E; margin-top: 0.3rem; }
   .metric-positive { color: #3FB950; }
   .metric-negative { color: #F85149; }
 
-  /* Page nav cards */
   .nav-card {
     background: #161B22;
     border: 1px solid #21262D;
@@ -102,7 +104,6 @@ st.markdown("""
   .nav-card-title { font-size: 0.95rem; font-weight: 600; color: #E6EDF3; }
   .nav-card-desc { font-size: 0.78rem; color: #8B949E; margin-top: 0.2rem; line-height: 1.4; }
 
-  /* Section heading */
   .section-heading {
     font-family: 'DM Serif Display', serif;
     font-size: 1.1rem;
@@ -112,7 +113,6 @@ st.markdown("""
     border-bottom: 1px solid #21262D;
   }
 
-  /* Risk badge */
   .risk-badge {
     display: inline-block;
     padding: 0.2rem 0.75rem;
@@ -122,12 +122,11 @@ st.markdown("""
     letter-spacing: 0.06em;
     text-transform: uppercase;
   }
-  .risk-conservative  { background: #0D419D22; color: #58A6FF; border: 1px solid #1F6FEB44; }
-  .risk-moderate      { background: #1A7F3722; color: #3FB950; border: 1px solid #238636aa; }
-  .risk-aggressive    { background: #9E6A0322; color: #E3B341; border: 1px solid #BB800944; }
+  .risk-conservative   { background: #0D419D22; color: #58A6FF; border: 1px solid #1F6FEB44; }
+  .risk-moderate       { background: #1A7F3722; color: #3FB950; border: 1px solid #238636aa; }
+  .risk-aggressive     { background: #9E6A0322; color: #E3B341; border: 1px solid #BB800944; }
   .risk-very-aggressive { background: #67060322; color: #F85149; border: 1px solid #F8514944; }
 
-  /* Hero wordmark */
   .wordmark {
     font-family: 'DM Serif Display', serif;
     font-size: 2rem;
@@ -139,7 +138,6 @@ st.markdown("""
   h1, h2, h3 { color: #E6EDF3 !important; }
   p, li { color: #C9D1D9; }
 
-  /* Streamlit overrides */
   .stSelectbox > div > div { background: #161B22 !important; border-color: #21262D !important; color: #E6EDF3 !important; }
   div[data-testid="metric-container"] { background: #161B22; border: 1px solid #21262D; border-radius: 10px; padding: 1rem; }
 </style>
@@ -150,48 +148,58 @@ st.markdown("""
 
 def get_all_clients():
     """Return list of (id, name, email) tuples from DB."""
-    if not os.path.exists(DATABASE_PATH):
+    try:
+        conn = sqlite3.connect(DATABASE_PATH)
+        cur = conn.execute("SELECT id, name, email FROM clients ORDER BY name")
+        rows = cur.fetchall()
+        conn.close()
+        return rows
+    except Exception:
         return []
-    conn = sqlite3.connect(DATABASE_PATH)
-    cur = conn.execute("SELECT id, name, email FROM clients ORDER BY name")
-    rows = cur.fetchall()
-    conn.close()
-    return rows
 
 
 def get_client_detail(client_id: int):
     """Return full client row as dict."""
-    conn = sqlite3.connect(DATABASE_PATH)
-    conn.row_factory = sqlite3.Row
-    row = conn.execute("SELECT * FROM clients WHERE id=?", (client_id,)).fetchone()
-    conn.close()
-    return dict(row) if row else {}
+    try:
+        conn = sqlite3.connect(DATABASE_PATH)
+        conn.row_factory = sqlite3.Row
+        row = conn.execute("SELECT * FROM clients WHERE id=?", (client_id,)).fetchone()
+        conn.close()
+        return dict(row) if row else {}
+    except Exception:
+        return {}
 
 
 def get_portfolio_quick(client_id: int):
-    """Fast portfolio totals. current_value estimated as units * avg_nav."""
-    conn = sqlite3.connect(DATABASE_PATH)
-    row = conn.execute("""
-        SELECT COUNT(*) AS n,
-               COALESCE(SUM(invested_amount), 0)   AS inv,
-               COALESCE(SUM(units * avg_nav), 0)   AS cur
-        FROM client_holdings WHERE client_id=?
-    """, (client_id,)).fetchone()
-    conn.close()
-    if row:
-        return {"n": row[0], "invested": row[1], "current": row[2]}
+    """Fast portfolio totals."""
+    try:
+        conn = sqlite3.connect(DATABASE_PATH)
+        row = conn.execute("""
+            SELECT COUNT(*) AS n,
+                   COALESCE(SUM(invested_amount), 0)   AS inv,
+                   COALESCE(SUM(units * avg_nav), 0)   AS cur
+            FROM client_holdings WHERE client_id=?
+        """, (client_id,)).fetchone()
+        conn.close()
+        if row:
+            return {"n": row[0], "invested": row[1], "current": row[2]}
+    except Exception:
+        pass
     return {"n": 0, "invested": 0.0, "current": 0.0}
 
 
 def get_goals_quick(client_id: int):
     """Return goal rows for client."""
-    conn = sqlite3.connect(DATABASE_PATH)
-    conn.row_factory = sqlite3.Row
-    rows = conn.execute(
-        "SELECT * FROM client_goals WHERE client_id=?", (client_id,)
-    ).fetchall()
-    conn.close()
-    return [dict(r) for r in rows]
+    try:
+        conn = sqlite3.connect(DATABASE_PATH)
+        conn.row_factory = sqlite3.Row
+        rows = conn.execute(
+            "SELECT * FROM client_goals WHERE client_id=?", (client_id,)
+        ).fetchall()
+        conn.close()
+        return [dict(r) for r in rows]
+    except Exception:
+        return []
 
 
 def risk_badge_html(profile: str) -> str:
@@ -216,7 +224,6 @@ with st.sidebar:
         client_options = {f"{name} ({email})": cid for cid, name, email in clients}
         labels = list(client_options.keys())
 
-        # Restore last selection
         default_idx = 0
         if "selected_client_id" in st.session_state:
             for i, (cid, *_) in enumerate(clients):
@@ -235,13 +242,13 @@ with st.sidebar:
     st.markdown("---")
     st.markdown('<p style="font-size:0.7rem;color:#8B949E;text-transform:uppercase;letter-spacing:0.08em;">Navigation</p>', unsafe_allow_html=True)
     pages = [
-        ("🧾", "Client Onboarding",  "pages/01_client_onboarding.py"),
-        ("🎯", "Goal Planner",        "pages/02_goal_planner.py"),
-        ("📈", "Portfolio",           "pages/03_portfolio.py"),
-        ("⚙️", "Optimiser",           "pages/04_optimiser.py"),
-        ("📄", "Advisory Report",     "pages/05_advisory_report.py"),
+        ("🧾", "Client Onboarding"),
+        ("🎯", "Goal Planner"),
+        ("📈", "Portfolio"),
+        ("⚙️", "Optimiser"),
+        ("📄", "Advisory Report"),
     ]
-    for icon, label, _ in pages:
+    for icon, label in pages:
         st.markdown(f"{icon} {label}")
 
     st.markdown("---")
@@ -259,9 +266,9 @@ if not client_id:
     st.info("👈  No clients in the database yet. Go to **Client Onboarding** to create one.")
     st.stop()
 
-client = get_client_detail(client_id)
+client    = get_client_detail(client_id)
 portfolio = get_portfolio_quick(client_id)
-goals = get_goals_quick(client_id)
+goals     = get_goals_quick(client_id)
 
 # ── Client Header ─────────────────────────────────────────────────────────────
 col_name, col_risk = st.columns([3, 1])
@@ -273,16 +280,16 @@ with col_name:
         f"</p>", unsafe_allow_html=True
     )
 with col_risk:
-    rp = client.get("risk_profile", "—")
+    rp = client.get("risk_profile", client.get("risk_label", "—"))
     st.markdown(f"<div style='padding-top:0.6rem;'>{risk_badge_html(rp)}</div>", unsafe_allow_html=True)
 
 # ── Summary Metric Cards ──────────────────────────────────────────────────────
 st.markdown('<div class="section-heading">Portfolio at a Glance</div>', unsafe_allow_html=True)
 
-invested = portfolio["invested"]
-current  = portfolio["current"]
-gain     = current - invested
-gain_pct = (gain / invested * 100) if invested > 0 else 0.0
+invested  = portfolio["invested"]
+current   = portfolio["current"]
+gain      = current - invested
+gain_pct  = (gain / invested * 100) if invested > 0 else 0.0
 total_sip = sum(g.get("monthly_sip", 0) or 0 for g in goals)
 
 c1, c2, c3, c4, c5 = st.columns(5)
@@ -299,7 +306,7 @@ with c2:
     st.markdown(f"""
     <div class="metric-card" style="--accent:#58A6FF">
       <div class="metric-label">Total Invested</div>
-      <div class="metric-value">₹{invested/1e5:.2f}L</div>
+      <div class="metric-value">&#8377;{invested/1e5:.2f}L</div>
       <div class="metric-sub">cost basis</div>
     </div>""", unsafe_allow_html=True)
 
@@ -307,17 +314,18 @@ with c3:
     st.markdown(f"""
     <div class="metric-card" style="--accent:#58A6FF">
       <div class="metric-label">Current Value</div>
-      <div class="metric-value">₹{current/1e5:.2f}L</div>
+      <div class="metric-value">&#8377;{current/1e5:.2f}L</div>
       <div class="metric-sub">mark-to-market</div>
     </div>""", unsafe_allow_html=True)
 
 with c4:
-    gain_cls = "metric-positive" if gain >= 0 else "metric-negative"
+    gain_cls  = "metric-positive" if gain >= 0 else "metric-negative"
     gain_sign = "+" if gain >= 0 else ""
+    gain_acc  = "#3FB950" if gain >= 0 else "#F85149"
     st.markdown(f"""
-    <div class="metric-card" style="--accent:{'#3FB950' if gain>=0 else '#F85149'}">
+    <div class="metric-card" style="--accent:{gain_acc}">
       <div class="metric-label">Unrealised Gain</div>
-      <div class="metric-value {gain_cls}">{gain_sign}₹{abs(gain)/1e5:.2f}L</div>
+      <div class="metric-value {gain_cls}">{gain_sign}&#8377;{abs(gain)/1e5:.2f}L</div>
       <div class="metric-sub {gain_cls}">{gain_sign}{gain_pct:.1f}%</div>
     </div>""", unsafe_allow_html=True)
 
@@ -325,7 +333,7 @@ with c5:
     st.markdown(f"""
     <div class="metric-card" style="--accent:#E3B341">
       <div class="metric-label">Monthly SIP</div>
-      <div class="metric-value">₹{total_sip/1e3:.1f}K</div>
+      <div class="metric-value">&#8377;{total_sip/1e3:.1f}K</div>
       <div class="metric-sub">across {len(goals)} goal(s)</div>
     </div>""", unsafe_allow_html=True)
 
@@ -342,8 +350,8 @@ if goals:
             <div class="metric-card" style="--accent:#E3B341;padding:1rem 1.25rem;">
               <div class="metric-label">{goal.get('goal_type','Goal').upper()}</div>
               <div style="font-size:0.88rem;font-weight:600;color:#E6EDF3;margin-bottom:0.3rem;">{goal.get('goal_name','—')}</div>
-              <div style="font-family:'JetBrains Mono',monospace;font-size:1rem;color:#E3B341;">₹{target/1e5:.1f}L</div>
-              <div class="metric-sub">SIP ₹{sip:,.0f}/mo · Target {yr}</div>
+              <div style="font-family:'JetBrains Mono',monospace;font-size:1rem;color:#E3B341;">&#8377;{target/1e5:.1f}L</div>
+              <div class="metric-sub">SIP &#8377;{sip:,.0f}/mo &middot; Target {yr}</div>
             </div>""", unsafe_allow_html=True)
 
 # ── Quick Nav ─────────────────────────────────────────────────────────────────
