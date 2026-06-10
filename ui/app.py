@@ -35,9 +35,6 @@ st.markdown("""
 
   html, body, [class*="css"] { font-family: 'Inter', sans-serif; }
 
-  /* Hide Streamlit's default page nav header (the "streamlitApp" label) */
-  [data-testid="stSidebarNav"] { display: none; }
-
   section[data-testid="stSidebar"] {
     background: #0D1117;
     border-right: 1px solid #21262D;
@@ -184,7 +181,6 @@ client    = get_client_detail(client_id)
 portfolio = get_portfolio_quick(client_id)
 goals     = get_goals_quick(client_id)
 
-# Client header
 col_name, col_risk = st.columns([3, 1])
 with col_name:
     st.markdown(f"### {client.get('name', '—')}")
@@ -196,7 +192,6 @@ with col_risk:
     rp = client.get("risk_profile", client.get("risk_label", "—"))
     st.markdown(f"<div style='padding-top:0.6rem;'>{risk_badge_html(rp)}</div>", unsafe_allow_html=True)
 
-# Metric cards
 st.markdown('<div class="section-heading">Portfolio at a Glance</div>', unsafe_allow_html=True)
 invested  = portfolio["invested"]
 current   = portfolio["current"]
@@ -219,7 +214,6 @@ with c4:
 with c5:
     st.markdown(f'<div class="metric-card" style="--accent:#E3B341"><div class="metric-label">Monthly SIP</div><div class="metric-value">&#8377;{total_sip/1e3:.1f}K</div><div class="metric-sub">across {len(goals)} goal(s)</div></div>', unsafe_allow_html=True)
 
-# Goals strip
 if goals:
     st.markdown('<div class="section-heading">Goals</div>', unsafe_allow_html=True)
     cols = st.columns(min(len(goals), 4))
@@ -231,7 +225,6 @@ if goals:
             icon   = {"retirement":"🏖️","education":"🎓","house":"🏠","emergency":"🛡️"}.get((goal.get("goal_type") or "").lower(), "🎯")
             st.markdown(f'<div class="metric-card" style="--accent:#E3B341;padding:1rem 1.25rem;"><div class="metric-label">{icon} {(goal.get("goal_type") or "goal").upper()}</div><div style="font-size:0.88rem;font-weight:600;color:#E6EDF3;margin-bottom:0.3rem;">{goal.get("goal_name","—")}</div><div style="font-family:JetBrains Mono,monospace;font-size:1rem;color:#E3B341;">&#8377;{target/1e5:.1f}L</div><div class="metric-sub">SIP &#8377;{sip:,.0f}/mo · Target {yr}</div></div>', unsafe_allow_html=True)
 
-# Tools grid
 st.markdown('<div class="section-heading">Tools</div>', unsafe_allow_html=True)
 nav_items = [
     ("🧾", "Client Onboarding",  "KYC form + 10-question SEBI risk questionnaire."),
