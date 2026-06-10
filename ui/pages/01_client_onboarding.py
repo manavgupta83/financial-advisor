@@ -1,7 +1,5 @@
 """
 ui/pages/01_client_onboarding.py
-----------------------------------
-Streamlit page: Client Onboarding + Risk Profiling.
 """
 
 import sys, os
@@ -10,13 +8,11 @@ if _repo_root not in sys.path:
     sys.path.insert(0, _repo_root)
 
 import streamlit as st
-from data.client_manager import (
-    create_client, get_client_by_email,
-    update_client_risk_profile, delete_client,
-)
+from data.client_manager import create_client, get_client_by_email, update_client_risk_profile
 from engine.risk_engine import QUESTIONNAIRE, compute_risk_profile, describe_profile
 from config.settings import DATABASE_PATH
 from data.database import init_db
+import sqlite3
 init_db()
 
 st.set_page_config(page_title="Client Onboarding", page_icon="🧾", layout="wide")
@@ -25,17 +21,19 @@ st.markdown("""
 <style>
   @import url('https://fonts.googleapis.com/css2?family=DM+Serif+Display&family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap');
   html, body, [class*="css"] { font-family: 'Inter', sans-serif; background: #0D1117; color: #C9D1D9; }
-  .block-container { padding: 2rem 2.5rem; }
+  [data-testid="stSidebarNav"] { display: none !important; }
   section[data-testid="stSidebar"] { background: #0D1117; border-right: 1px solid #21262D; }
   section[data-testid="stSidebar"] * { color: #C9D1D9 !important; }
+  .block-container { padding: 2rem 2.5rem; }
   .page-title { font-family: 'DM Serif Display', serif; font-size: 1.9rem; color: #E6EDF3; }
   .page-sub { color: #8B949E; font-size: 0.85rem; margin-top: -0.5rem; margin-bottom: 1.5rem; }
-  .form-section { background: #161B22; border: 1px solid #21262D; border-radius: 10px; padding: 1.5rem 1.75rem; margin-bottom: 1.25rem; }
   .form-section-title { font-size: 0.7rem; font-weight: 700; letter-spacing: 0.1em; text-transform: uppercase; color: #3FB950; margin-bottom: 1rem; }
   .q-number { font-size: 0.65rem; color: #8B949E; font-weight: 600; letter-spacing: 0.1em; text-transform: uppercase; }
   .q-text { font-size: 0.92rem; color: #E6EDF3; margin-top: 0.2rem; margin-bottom: 0.75rem; }
   .profile-card { background: #161B22; border: 1px solid #238636; border-radius: 12px; padding: 2rem; margin-top: 1.5rem; border-top: 4px solid #3FB950; }
   .profile-title { font-family: 'DM Serif Display', serif; font-size: 1.5rem; color: #E6EDF3; }
+  .wordmark { font-family: 'DM Serif Display', serif; font-size: 1.6rem; color: #E6EDF3; }
+  .wordmark span { color: #3FB950; }
   h1,h2,h3 { color: #E6EDF3 !important; }
   .stTextInput > div > div, .stNumberInput > div > div { background: #0D1117 !important; border-color: #30363D !important; color: #E6EDF3 !important; }
   .stSelectbox > div > div { background: #0D1117 !important; border-color: #30363D !important; }
@@ -43,8 +41,35 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 with st.sidebar:
-    st.markdown("### 🧾 Client Onboarding")
-    st.caption("Create a new client and assess their risk profile.")
+    st.markdown('<div class="wordmark">Fin<span>.</span>Advisor</div>', unsafe_allow_html=True)
+    st.markdown('<p style="font-size:0.7rem;color:#8B949E;margin-top:-0.2rem;margin-bottom:1rem;">AI-Powered Advisory Platform</p>', unsafe_allow_html=True)
+    st.divider()
+    # Client selector
+    try:
+        conn = sqlite3.connect(DATABASE_PATH)
+        clients = conn.execute("SELECT id, name FROM clients ORDER BY name").fetchall()
+        conn.close()
+    except Exception:
+        clients = []
+    if clients:
+        names = [r[1] for r in clients]
+        ids   = [r[0] for r in clients]
+        default = 0
+        if st.session_state.get("selected_client_id") in ids:
+            default = ids.index(st.session_state["selected_client_id"])
+        chosen = st.selectbox("Active Client", names, index=default)
+        st.session_state["selected_client_id"] = ids[names.index(chosen)]
+    else:
+        st.caption("No clients yet.")
+    st.divider()
+    st.markdown('<p style="font-size:0.7rem;color:#8B949E;text-transform:uppercase;letter-spacing:0.08em;margin-bottom:0.5rem;">Navigation</p>', unsafe_allow_html=True)
+    st.page_link("pages/01_Client_Onboarding.py", label="Client Onboarding", icon="🧾")
+    st.page_link("pages/02_Goal_Planner.py",      label="Goal Planner",       icon="🎯")
+    st.page_link("pages/03_Portfolio.py",          label="Portfolio",          icon="📈")
+    st.page_link("pages/04_Optimiser.py",          label="Optimiser",          icon="⚙️")
+    st.page_link("pages/05_Advisory_Report.py",    label="Advisory Report",    icon="📄")
+    st.divider()
+    st.markdown('<p style="font-size:0.65rem;color:#30363D;">Phase 5 — Streamlit UI</p>', unsafe_allow_html=True)
 
 st.markdown('<div class="page-title">Client Onboarding</div>', unsafe_allow_html=True)
 st.markdown('<div class="page-sub">Complete KYC details and the 10-question SEBI-aligned risk questionnaire.</div>', unsafe_allow_html=True)
@@ -67,20 +92,17 @@ with tab_new:
         c4, _ = st.columns([1, 2])
         with c4:
             dependants = st.number_input("Dependants", min_value=0, max_value=10, value=1)
-
         st.markdown("<br>", unsafe_allow_html=True)
         st.markdown('<div class="form-section-title">Risk Questionnaire — 10 Questions</div>', unsafe_allow_html=True)
         st.caption("Select the option that best describes your situation.")
-
         responses: dict[int, int] = {}
         for q in QUESTIONNAIRE:
             st.markdown(f'<div class="q-number">Question {q["id"]}</div><div class="q-text">{q["question"]}</div>', unsafe_allow_html=True)
             options_text = [opt["text"] for opt in q["options"]]
-            chosen = st.radio(label=f"q_{q['id']}", options=options_text, index=0,
+            chosen_opt = st.radio(label=f"q_{q['id']}", options=options_text, index=0,
                               label_visibility="collapsed", key=f"q_{q['id']}", horizontal=False)
-            responses[q["id"]] = options_text.index(chosen)
+            responses[q["id"]] = options_text.index(chosen_opt)
             st.markdown("<br>", unsafe_allow_html=True)
-
         submitted = st.form_submit_button("✅  Save Client & Compute Risk Profile", type="primary", use_container_width=True)
 
     if submitted:
@@ -89,7 +111,7 @@ with tab_new:
             st.stop()
         existing = get_client_by_email(email)
         if existing:
-            st.warning(f"Client with email **{email}** already exists (ID {existing.id}). Updating risk profile.")
+            st.warning(f"Client with email **{email}** already exists. Updating risk profile.")
             profile = compute_risk_profile(responses=responses, age=age, annual_income=annual_income, dependants=dependants)
             update_client_risk_profile(existing.id, profile.category.value, profile.adjusted_score)
             client = existing
@@ -97,22 +119,19 @@ with tab_new:
             client = create_client(name=name, email=email, phone=phone, age=age, annual_income=annual_income, dependants=dependants, pan=pan)
             profile = compute_risk_profile(responses=responses, age=age, annual_income=annual_income, dependants=dependants)
             update_client_risk_profile(client.id, profile.category.value, profile.adjusted_score)
-
         st.session_state["selected_client_id"] = client.id
         st.success(f"Client **{client.name}** saved  ·  ID: {client.id}")
-
         color_map = {"Conservative":"#58A6FF","Moderate":"#3FB950","Aggressive":"#E3B341","Very Aggressive":"#F85149"}
         accent = color_map.get(profile.category.value, "#3FB950")
         st.markdown(f"""
         <div class="profile-card" style="border-top-color:{accent};">
           <div class="profile-title" style="color:{accent};">{profile.category.value}</div>
-          <p style="color:#8B949E;margin:0.4rem 0 1rem;font-size:0.85rem;">Raw score: {profile.raw_score} · Adjusted score: {profile.adjusted_score}</p>
+          <p style="color:#8B949E;margin:0.4rem 0 1rem;font-size:0.85rem;">Raw score: {profile.raw_score} · Adjusted: {profile.adjusted_score}</p>
           <p style="color:#C9D1D9;white-space:pre-line;font-size:0.9rem;">{describe_profile(profile)}</p>
         </div>""", unsafe_allow_html=True)
-        st.info("➡️  Head to **Goal Planner** to define this client's financial goals.")
+        st.info("➡️  Head to **Goal Planner** to define financial goals.")
 
 with tab_view:
-    import sqlite3
     try:
         conn = sqlite3.connect(DATABASE_PATH)
         conn.row_factory = sqlite3.Row
@@ -120,14 +139,11 @@ with tab_view:
         conn.close()
     except Exception:
         rows = []
-
     if not rows:
-        st.info("No clients in the database yet.")
+        st.info("No clients yet.")
     else:
         for row in rows:
             rp = row["risk_profile"] or "—"
-            color_map = {"Conservative":"#58A6FF","Moderate":"#3FB950","Aggressive":"#E3B341","Very Aggressive":"#F85149"}
-            accent = color_map.get(rp, "#8B949E")
             income = row["annual_income"] or 0
             with st.expander(f"**{row['name']}**  ·  {row['email']}"):
                 cc1, cc2, cc3, cc4 = st.columns(4)
@@ -135,6 +151,6 @@ with tab_view:
                 cc2.metric("Annual Income", f"₹{income/1e5:.1f}L")
                 cc3.metric("Risk Profile", rp)
                 cc4.metric("Risk Score", row["risk_score"] or 0)
-                if st.button("Select as Active Client", key=f"sel_{row['id']}"):
+                if st.button("Set as Active Client", key=f"sel_{row['id']}"):
                     st.session_state["selected_client_id"] = row["id"]
-                    st.success(f"Active client set to **{row['name']}**")
+                    st.success(f"Active client: **{row['name']}**")

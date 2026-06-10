@@ -1,7 +1,5 @@
 """
 ui/pages/02_goal_planner.py
------------------------------
-Streamlit page: Goal Planner.
 """
 
 import sys, os
@@ -26,29 +24,62 @@ st.markdown("""
 <style>
   @import url('https://fonts.googleapis.com/css2?family=DM+Serif+Display&family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap');
   html, body, [class*="css"] { font-family: 'Inter', sans-serif; background: #0D1117; color: #C9D1D9; }
-  .block-container { padding: 2rem 2.5rem; }
+  [data-testid="stSidebarNav"] { display: none !important; }
   section[data-testid="stSidebar"] { background: #0D1117; border-right: 1px solid #21262D; }
   section[data-testid="stSidebar"] * { color: #C9D1D9 !important; }
+  .block-container { padding: 2rem 2.5rem; }
   .page-title { font-family: 'DM Serif Display', serif; font-size: 1.9rem; color: #E6EDF3; }
   .page-sub { color: #8B949E; font-size: 0.85rem; margin-top: -0.5rem; margin-bottom: 1.5rem; }
   .goal-card { background: #161B22; border: 1px solid #21262D; border-radius: 10px; padding: 1.25rem 1.5rem; margin-bottom: 0.75rem; border-left: 4px solid #E3B341; }
   .goal-title { font-size: 1rem; font-weight: 600; color: #E6EDF3; }
   .goal-meta { font-size: 0.78rem; color: #8B949E; margin-top: 0.2rem; }
   .sip-value { font-family: 'JetBrains Mono', monospace; font-size: 1.4rem; color: #3FB950; }
-  .fv-value { font-family: 'JetBrains Mono', monospace; font-size: 1rem; color: #58A6FF; }
+  .fv-value  { font-family: 'JetBrains Mono', monospace; font-size: 1rem; color: #58A6FF; }
   .section-heading { font-family: 'DM Serif Display', serif; font-size: 1.1rem; color: #E6EDF3; margin: 1.5rem 0 0.75rem; padding-bottom: 0.4rem; border-bottom: 1px solid #21262D; }
+  .wordmark { font-family: 'DM Serif Display', serif; font-size: 1.6rem; color: #E6EDF3; }
+  .wordmark span { color: #3FB950; }
   h1,h2,h3 { color: #E6EDF3 !important; }
   .stTextInput > div > div, .stNumberInput > div > div { background: #0D1117 !important; border-color: #30363D !important; color: #E6EDF3 !important; }
   .stSelectbox > div > div { background: #0D1117 !important; border-color: #30363D !important; }
 </style>
 """, unsafe_allow_html=True)
 
-with st.sidebar:
-    st.markdown("### 🎯 Goal Planner")
-    st.caption("Define goals and auto-compute SIP requirements.")
+
+def _sidebar():
+    with st.sidebar:
+        st.markdown('<div class="wordmark">Fin<span>.</span>Advisor</div>', unsafe_allow_html=True)
+        st.markdown('<p style="font-size:0.7rem;color:#8B949E;margin-top:-0.2rem;margin-bottom:1rem;">AI-Powered Advisory Platform</p>', unsafe_allow_html=True)
+        st.divider()
+        try:
+            conn = sqlite3.connect(DATABASE_PATH)
+            clients = conn.execute("SELECT id, name FROM clients ORDER BY name").fetchall()
+            conn.close()
+        except Exception:
+            clients = []
+        if clients:
+            names = [r[1] for r in clients]
+            ids   = [r[0] for r in clients]
+            default = 0
+            if st.session_state.get("selected_client_id") in ids:
+                default = ids.index(st.session_state["selected_client_id"])
+            chosen = st.selectbox("Active Client", names, index=default)
+            st.session_state["selected_client_id"] = ids[names.index(chosen)]
+        else:
+            st.caption("No clients yet.")
+        st.divider()
+        st.markdown('<p style="font-size:0.7rem;color:#8B949E;text-transform:uppercase;letter-spacing:0.08em;margin-bottom:0.5rem;">Navigation</p>', unsafe_allow_html=True)
+        st.page_link("pages/01_Client_Onboarding.py", label="Client Onboarding", icon="🧾")
+        st.page_link("pages/02_Goal_Planner.py",      label="Goal Planner",       icon="🎯")
+        st.page_link("pages/03_Portfolio.py",          label="Portfolio",          icon="📈")
+        st.page_link("pages/04_Optimiser.py",          label="Optimiser",          icon="⚙️")
+        st.page_link("pages/05_Advisory_Report.py",    label="Advisory Report",    icon="📄")
+        st.divider()
+        st.markdown('<p style="font-size:0.65rem;color:#30363D;">Phase 5 — Streamlit UI</p>', unsafe_allow_html=True)
+
+_sidebar()
 
 
-def get_client(client_id: int) -> dict:
+def get_client(client_id):
     try:
         conn = sqlite3.connect(DATABASE_PATH)
         conn.row_factory = sqlite3.Row
@@ -59,22 +90,18 @@ def get_client(client_id: int) -> dict:
         return {}
 
 
-def feasibility_gauge(sip_pct: float) -> go.Figure:
+def feasibility_gauge(sip_pct):
     color = "#3FB950" if sip_pct < 30 else ("#E3B341" if sip_pct < 40 else "#F85149")
     fig = go.Figure(go.Indicator(
-        mode="gauge+number",
-        value=sip_pct,
+        mode="gauge+number", value=sip_pct,
         number={"suffix": "%", "font": {"color": "#E6EDF3", "family": "JetBrains Mono", "size": 28}},
         title={"text": "SIP as % of Monthly Income", "font": {"color": "#8B949E", "size": 12}},
-        gauge={
-            "axis": {"range": [0, 80], "tickcolor": "#30363D", "tickfont": {"color": "#8B949E", "size": 10}},
-            "bar": {"color": color, "thickness": 0.25},
-            "bgcolor": "#161B22", "bordercolor": "#21262D",
-            "steps": [{"range": [0,30], "color": "#1A7F3722"},{"range": [30,40], "color": "#9E6A0322"},{"range": [40,80], "color": "#67060322"}],
-            "threshold": {"line": {"color": "#F85149", "width": 2}, "thickness": 0.7, "value": 40},
-        }
+        gauge={"axis": {"range": [0, 80]}, "bar": {"color": color, "thickness": 0.25},
+               "bgcolor": "#161B22", "bordercolor": "#21262D",
+               "steps": [{"range": [0,30], "color": "#1A7F3722"},{"range": [30,40], "color": "#9E6A0322"},{"range": [40,80], "color": "#67060322"}],
+               "threshold": {"line": {"color": "#F85149", "width": 2}, "thickness": 0.7, "value": 40}}
     ))
-    fig.update_layout(paper_bgcolor="#161B22", plot_bgcolor="#161B22", font={"color": "#E6EDF3"}, height=220, margin=dict(l=20, r=20, t=40, b=0))
+    fig.update_layout(paper_bgcolor="#161B22", plot_bgcolor="#161B22", font={"color": "#E6EDF3"}, height=220, margin=dict(l=20,r=20,t=40,b=0))
     return fig
 
 
@@ -86,16 +113,16 @@ GOAL_TYPE_MAP = {
 }
 
 st.markdown('<div class="page-title">Goal Planner</div>', unsafe_allow_html=True)
-st.markdown('<div class="page-sub">Define financial goals and auto-compute SIP requirements with inflation-adjusted projections.</div>', unsafe_allow_html=True)
+st.markdown('<div class="page-sub">Define financial goals and auto-compute SIP with inflation-adjusted projections.</div>', unsafe_allow_html=True)
 
 client_id = st.session_state.get("selected_client_id")
 if not client_id:
-    st.warning("No active client. Please select or create a client in **Client Onboarding** first.")
+    st.warning("No active client. Go to **Client Onboarding** first.")
     st.stop()
 
 client = get_client(client_id)
 if not client:
-    st.error("Client not found in DB.")
+    st.error("Client not found.")
     st.stop()
 
 monthly_income = (client.get("annual_income") or 0) / 12
@@ -127,16 +154,14 @@ with tab_add:
         if not goal_name:
             st.error("Goal Name is required.")
             st.stop()
-        goal_type_enum = GOAL_TYPE_MAP[goal_type_label]
         goal_input = GoalInput(
-            goal_type=goal_type_enum, name=goal_name, target_amount_today=target_today,
-            years_to_goal=years_to_goal, existing_investment=existing_inv,
-            inflation_rate=inflation_rate / 100.0,
-            monthly_expense_at_goal=monthly_expense if monthly_expense > 0 else 0,
-        )
+            goal_type=GOAL_TYPE_MAP[goal_type_label], name=goal_name,
+            target_amount_today=target_today, years_to_goal=years_to_goal,
+            existing_investment=existing_inv, inflation_rate=inflation_rate/100.0,
+            monthly_expense_at_goal=monthly_expense if monthly_expense > 0 else 0)
         plans = plan_all_goals(goals=[goal_input], risk_profile=risk_profile, monthly_income=monthly_income)
         plan  = plans[0]
-        add_goal(client_id=client_id, goal_name=goal_name, goal_type=goal_type_enum.value,
+        add_goal(client_id=client_id, goal_name=goal_name, goal_type=GOAL_TYPE_MAP[goal_type_label].value,
                  target_amount=plan.future_value, target_year=date.today().year + years_to_goal,
                  current_savings=existing_inv, monthly_sip=plan.adjusted_sip, priority=1)
         st.success(f"Goal **{goal_name}** saved!")
@@ -155,28 +180,26 @@ with tab_add:
             status = '✅ Comfortable' if sip_pct < 30 else ('⚠️ Stretching' if sip_pct < 40 else '🔴 Exceeds 40% cap')
             color  = '#3FB950' if sip_pct < 30 else ('#E3B341' if sip_pct < 40 else '#F85149')
             st.markdown(f"<div style='background:#161B22;border:1px solid #21262D;border-radius:10px;padding:1.25rem;'><div style='font-size:0.7rem;color:#8B949E;text-transform:uppercase;'>SIP Feasibility</div><div style='font-family:JetBrains Mono,monospace;font-size:1.4rem;color:#E6EDF3;'>₹{total_sip:,.0f}/mo</div><div style='font-size:0.82rem;color:#8B949E;margin-top:0.5rem;'>{sip_pct:.1f}% of ₹{monthly_income:,.0f}<br><span style='color:{color};'>{status}</span></div></div>", unsafe_allow_html=True)
-        with st.expander("📋 Full goal plan detail"):
+        with st.expander("📋 Full goal plan"):
             st.code(format_goal_plan(plan), language=None)
 
 with tab_existing:
     goals = get_goals_for_client(client_id)
     if not goals:
-        st.info("No goals defined yet. Use **Add Goal** to create one.")
+        st.info("No goals yet. Use **Add Goal**.")
     else:
         total_sip = sum(g.monthly_sip or 0 for g in goals)
         sip_pct   = (total_sip / monthly_income * 100) if monthly_income > 0 else 0
         gc1, gc2, gc3 = st.columns([1, 1, 1])
-        with gc1:
-            st.plotly_chart(feasibility_gauge(sip_pct), use_container_width=True)
+        with gc1: st.plotly_chart(feasibility_gauge(sip_pct), use_container_width=True)
         with gc2:
             st.metric("Total Monthly SIP", f"₹{total_sip:,.0f}")
             st.metric("% of Income", f"{sip_pct:.1f}%")
         with gc3:
-            total_target = sum(g.target_amount or 0 for g in goals)
             st.metric("Goals Count", len(goals))
-            st.metric("Total Future Value", f"₹{total_target/1e5:.1f}L")
+            st.metric("Total Future Value", f"₹{sum(g.target_amount or 0 for g in goals)/1e5:.1f}L")
         st.markdown('<div class="section-heading">Goal Breakdown</div>', unsafe_allow_html=True)
         for goal in goals:
             gtype = goal.goal_type or "goal"
             icon  = {"retirement":"🏖️","education":"🎓","house":"🏠","emergency":"🛡️"}.get(gtype.lower(), "🎯")
-            st.markdown(f"""<div class="goal-card"><div class="goal-title">{icon} {goal.goal_name or '—'}</div><div class="goal-meta">{gtype.title()} · Target year: {goal.target_year or '—'} · Existing: ₹{goal.current_savings or 0:,.0f}</div><div style='display:flex;gap:2rem;margin-top:0.75rem;'><div><div style='font-size:0.65rem;color:#8B949E;text-transform:uppercase;'>Monthly SIP</div><div class='sip-value'>₹{goal.monthly_sip or 0:,.0f}</div></div><div><div style='font-size:0.65rem;color:#8B949E;text-transform:uppercase;'>Future Value</div><div class='fv-value'>₹{(goal.target_amount or 0)/1e5:.2f}L</div></div></div></div>""", unsafe_allow_html=True)
+            st.markdown(f"""<div class="goal-card"><div class="goal-title">{icon} {goal.goal_name or '—'}</div><div class="goal-meta">{gtype.title()} · Target: {goal.target_year or '—'} · Existing: ₹{goal.current_savings or 0:,.0f}</div><div style='display:flex;gap:2rem;margin-top:0.75rem;'><div><div style='font-size:0.65rem;color:#8B949E;text-transform:uppercase;'>Monthly SIP</div><div class='sip-value'>₹{goal.monthly_sip or 0:,.0f}</div></div><div><div style='font-size:0.65rem;color:#8B949E;text-transform:uppercase;'>Future Value</div><div class='fv-value'>₹{(goal.target_amount or 0)/1e5:.2f}L</div></div></div></div>""", unsafe_allow_html=True)
