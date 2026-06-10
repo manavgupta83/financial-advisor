@@ -35,29 +35,45 @@ st.markdown("""
 
   html, body, [class*="css"] { font-family: 'Inter', sans-serif; }
 
+  /* Hide Streamlit's ugly default page list — we use st.page_link instead */
+  [data-testid="stSidebarNav"] { display: none !important; }
+
   section[data-testid="stSidebar"] {
     background: #0D1117;
     border-right: 1px solid #21262D;
   }
   section[data-testid="stSidebar"] * { color: #C9D1D9 !important; }
 
+  /* Style st.page_link buttons in sidebar */
+  section[data-testid="stSidebar"] a[data-testid="stPageLink-NavLink"] {
+    background: transparent !important;
+    border-radius: 6px !important;
+    padding: 0.4rem 0.6rem !important;
+    margin-bottom: 2px !important;
+    font-size: 0.88rem !important;
+    color: #C9D1D9 !important;
+    text-decoration: none !important;
+    display: flex !important;
+    align-items: center !important;
+    gap: 0.5rem !important;
+    transition: background 0.15s !important;
+  }
+  section[data-testid="stSidebar"] a[data-testid="stPageLink-NavLink"]:hover {
+    background: #21262D !important;
+    color: #E6EDF3 !important;
+  }
+
   .main { background: #0D1117; }
   .block-container { padding: 2rem 2.5rem; }
 
   .metric-card {
-    background: #161B22;
-    border: 1px solid #21262D;
-    border-radius: 10px;
-    padding: 1.25rem 1.5rem;
-    position: relative;
-    overflow: hidden;
+    background: #161B22; border: 1px solid #21262D;
+    border-radius: 10px; padding: 1.25rem 1.5rem;
+    position: relative; overflow: hidden;
   }
   .metric-card::before {
-    content: '';
-    position: absolute;
-    top: 0; left: 0; right: 0;
-    height: 3px;
-    background: var(--accent, #3FB950);
+    content: ''; position: absolute; top: 0; left: 0; right: 0;
+    height: 3px; background: var(--accent, #3FB950);
   }
   .metric-label { font-size: 0.7rem; font-weight: 600; letter-spacing: 0.1em; text-transform: uppercase; color: #8B949E; margin-bottom: 0.4rem; }
   .metric-value { font-family: 'JetBrains Mono', monospace; font-size: 1.6rem; font-weight: 500; color: #E6EDF3; line-height: 1.1; }
@@ -73,9 +89,9 @@ st.markdown("""
   .section-heading { font-family: 'DM Serif Display', serif; font-size: 1.1rem; color: #E6EDF3; margin: 1.5rem 0 0.75rem; padding-bottom: 0.4rem; border-bottom: 1px solid #21262D; }
 
   .risk-badge { display: inline-block; padding: 0.2rem 0.75rem; border-radius: 20px; font-size: 0.72rem; font-weight: 600; letter-spacing: 0.06em; text-transform: uppercase; }
-  .risk-conservative   { background: #0D419D22; color: #58A6FF; border: 1px solid #1F6FEB44; }
-  .risk-moderate       { background: #1A7F3722; color: #3FB950; border: 1px solid #238636aa; }
-  .risk-aggressive     { background: #9E6A0322; color: #E3B341; border: 1px solid #BB800944; }
+  .risk-conservative    { background: #0D419D22; color: #58A6FF; border: 1px solid #1F6FEB44; }
+  .risk-moderate        { background: #1A7F3722; color: #3FB950; border: 1px solid #238636aa; }
+  .risk-aggressive      { background: #9E6A0322; color: #E3B341; border: 1px solid #BB800944; }
   .risk-very-aggressive { background: #67060322; color: #F85149; border: 1px solid #F8514944; }
 
   .wordmark { font-family: 'DM Serif Display', serif; font-size: 1.6rem; color: #E6EDF3; letter-spacing: -0.01em; }
@@ -148,7 +164,7 @@ with st.sidebar:
 
     clients = get_all_clients()
     if clients:
-        client_options = {f"{name}": cid for cid, name, email in clients}
+        client_options = {name: cid for cid, name, email in clients}
         labels = list(client_options.keys())
         default_idx = 0
         if "selected_client_id" in st.session_state:
@@ -157,12 +173,21 @@ with st.sidebar:
                     default_idx = i
                     break
         chosen_label = st.selectbox("Active Client", labels, index=default_idx)
-        selected_id  = client_options[chosen_label]
-        st.session_state["selected_client_id"]    = selected_id
+        st.session_state["selected_client_id"]    = client_options[chosen_label]
         st.session_state["selected_client_label"] = chosen_label
     else:
         st.warning("No clients yet. Start with **Client Onboarding**.")
         st.session_state["selected_client_id"] = None
+
+    st.divider()
+    st.markdown('<p style="font-size:0.7rem;color:#8B949E;text-transform:uppercase;letter-spacing:0.08em;margin-bottom:0.5rem;">Navigation</p>', unsafe_allow_html=True)
+
+    # Proper clickable page links
+    st.page_link("pages/01_Client_Onboarding.py", label="Client Onboarding", icon="🧾")
+    st.page_link("pages/02_Goal_Planner.py",      label="Goal Planner",       icon="🎯")
+    st.page_link("pages/03_Portfolio.py",          label="Portfolio",          icon="📈")
+    st.page_link("pages/04_Optimiser.py",          label="Optimiser",          icon="⚙️")
+    st.page_link("pages/05_Advisory_Report.py",    label="Advisory Report",    icon="📄")
 
     st.divider()
     st.markdown('<p style="font-size:0.65rem;color:#30363D;">Phase 5 — Streamlit UI</p>', unsafe_allow_html=True)
@@ -170,7 +195,7 @@ with st.sidebar:
 
 # ── Main Dashboard ─────────────────────────────────────────────────────────────
 st.markdown('<div class="wordmark" style="font-size:2rem;">Dashboard</div>', unsafe_allow_html=True)
-st.markdown('<p style="color:#8B949E;margin-top:-0.3rem;margin-bottom:1.5rem;">Select a client in the sidebar, then navigate using the pages above.</p>', unsafe_allow_html=True)
+st.markdown('<p style="color:#8B949E;margin-top:-0.3rem;margin-bottom:1.5rem;">Select a client in the sidebar, then navigate to any tool.</p>', unsafe_allow_html=True)
 
 client_id = st.session_state.get("selected_client_id")
 if not client_id:
