@@ -9,12 +9,16 @@ Responsibilities:
   - CRUD for client_holdings
   - All operations use exact column names from the Phase 1 schema
 
-Schema (as built in Phase 1):
-  clients         — id, name, age, annual_income, monthly_expense, retirement_age,
-                    risk_score, risk_label, created_at, email, phone, monthly_income,
-                    dependants, pan, risk_profile, updated_at
-  client_goals    — id, client_id, goal_name, target_amount, target_year,
-                    monthly_sip, priority, risk_override
+Phase 5 fix: ClientGoal dataclass and add_goal() now persist goal_type and
+current_savings — previously accepted but silently dropped, causing
+AttributeError on goal.goal_type in the Goal Planner UI page.
+
+Schema (as built in Phase 1 + Phase 5 migrations):
+  clients         — id, name, age, annual_income, monthly_income,
+                    monthly_expense, retirement_age, dependants, email, phone,
+                    pan, risk_score, risk_label, risk_profile, created_at, updated_at
+  client_goals    — id, client_id, goal_name, goal_type, target_amount,
+                    target_year, current_savings, monthly_sip, priority, risk_override
   client_holdings — id, client_id, scheme_code, goal_id, units, avg_nav, invested_amount
 """
 
@@ -51,14 +55,17 @@ class Client:
 
 @dataclass
 class ClientGoal:
-    id:             int
-    client_id:      int
-    goal_name:      str
-    target_amount:  float
-    target_year:    int
-    monthly_sip:    Optional[float]
-    priority:       str             # VARCHAR in schema
-    risk_override:  Optional[str]
+    id:               int
+    client_id:        int
+    goal_name:        str
+    goal_type:        Optional[str]   # retirement / education / house / emergency
+    target_amount:    float
+    target_year:      int
+    current_savings:  Optional[float]
+    monthly_sip:      Optional[float]
+    priority:         str             # VARCHAR in schema
+    risk_override:    Optional[str]
+
 
 @dataclass
 class ClientHolding:
@@ -211,20 +218,25 @@ def add_goal(
     monthly_sip: Optional[float] = None,
     priority: str = "1",
     risk_override: Optional[str] = None,
-    # accepted but ignored — kept so callers don't break
     goal_type: Optional[str] = None,
     current_savings: Optional[float] = None,
 ) -> ClientGoal:
+    """
+    Persist a client goal.
+
+    Phase 5 fix: goal_type and current_savings are now stored in the DB
+    (previously accepted as kwargs but silently dropped).
+    """
     with _get_conn() as conn:
         cursor = conn.execute(
             """
             INSERT INTO client_goals
-                (client_id, goal_name, target_amount, target_year,
-                 monthly_sip, priority, risk_override)
-            VALUES (?, ?, ?, ?, ?, ?, ?)
+                (client_id, goal_name, goal_type, target_amount, target_year,
+                 current_savings, monthly_sip, priority, risk_override)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
-            (client_id, goal_name, target_amount, target_year,
-             monthly_sip, str(priority), risk_override),
+            (client_id, goal_name, goal_type, target_amount, target_year,
+             current_savings or 0.0, monthly_sip, str(priority), risk_override),
         )
         goal_id = cursor.lastrowid
     return get_goal_by_id(goal_id)
@@ -262,6 +274,7 @@ def delete_goal(goal_id: int) -> bool:
             "DELETE FROM client_goals WHERE id = ?", (goal_id,)
         )
     return cursor.rowcount > 0
+
 
 def deactivate_goal(goal_id: int) -> bool:
     """No is_active column in schema — falls back to hard delete."""
@@ -321,9 +334,11 @@ def delete_holding(holding_id: int) -> bool:
         )
     return cursor.rowcount > 0
 
+
 def update_holding_current_value(holding_id: int, current_value: float) -> bool:
     """No current_value column in schema — no-op until Phase 3 NAV refresh adds it."""
     return True
+
 
 def get_portfolio_summary(client_id: int) -> dict:
     holdings = get_holdings_for_client(client_id)
@@ -331,7 +346,7 @@ def get_portfolio_summary(client_id: int) -> dict:
     # No current_value column — use invested_amount as proxy until NAV refresh runs
     return {
         "total_invested":  total_invested,
-        "total_current":   total_invested,   # updated by nav_fetcher in Phase 3
+        "total_current":   total_invested,
         "absolute_gain":   0.0,
         "gain_percentage": 0.0,
         "num_holdings":    len(holdings),
@@ -367,12 +382,15 @@ def _row_to_goal(row: sqlite3.Row) -> ClientGoal:
         id=d["id"],
         client_id=d["client_id"],
         goal_name=d["goal_name"],
+        goal_type=d.get("goal_type"),
         target_amount=d["target_amount"],
         target_year=d["target_year"],
+        current_savings=d.get("current_savings") or 0.0,
         monthly_sip=d.get("monthly_sip"),
         priority=d.get("priority", "1"),
         risk_override=d.get("risk_override"),
     )
+
 
 def _row_to_holding(row: sqlite3.Row) -> ClientHolding:
     d = dict(row)
@@ -384,5 +402,5 @@ def _row_to_holding(row: sqlite3.Row) -> ClientHolding:
         units=d["units"],
         avg_nav=d["avg_nav"],
         invested_amount=d["invested_amount"],
-        current_value=None,   # populated by update_holding_current_value in memory
+        current_value=None,
     )

@@ -6,18 +6,18 @@ Phase 4 — Claude AI Advisor Integration.
 Provides three main capabilities:
 
 1. stream_advisory_narrative()
-   Full streaming advisory report for a client. Takes the complete client
-   context (profile, goals, plans, portfolio, optimiser result) and streams
-   a professional, personalised narrative using Claude.
+   Full streaming advisory report for a client. Accepts either:
+     - A single client_context dict (Phase 5 UI call pattern)
+     - Four separate args: client_data, goals, portfolio, opt_result
+       (original Phase 4 / CLI call pattern)
 
 2. parse_optimiser_constraints()
    Natural-language constraint parsing via Claude.
-   e.g. "no more than 25% in any single fund, at least 4 funds" →
-   OptimiserConstraints(max_weight=0.25, min_funds=4, ...)
 
 3. explain_portfolio_optimisation()
-   Plain-language explanation of why the optimiser picked certain funds,
-   tailored to the client's risk profile and goals.
+   Plain-language streaming explanation of the optimiser result.
+   Phase 5 fix: now a generator (yields str chunks) and accepts the
+   kwargs pattern used by ui/pages/04_optimiser.py.
 
 Design decisions
 ----------------
@@ -35,7 +35,6 @@ import json
 import logging
 import os
 import re
-from dataclasses import asdict
 from typing import Generator, Optional
 
 from dotenv import load_dotenv
@@ -43,6 +42,7 @@ from dotenv import load_dotenv
 load_dotenv()
 
 logger = logging.getLogger(__name__)
+
 
 # ── Lazy import so the module loads even without anthropic installed ──────────
 
@@ -53,7 +53,7 @@ def _get_anthropic_client():
         api_key = os.getenv("ANTHROPIC_API_KEY")
         if not api_key:
             raise EnvironmentError(
-                "ANTHROPIC_API_KEY not set. Add it to your .env file."
+                "ANTHROPIC_API_KEY not set. Add it to your .env file or Streamlit Secrets."
             )
         return anthropic.Anthropic(api_key=api_key)
     except ImportError:
@@ -68,26 +68,21 @@ def _get_anthropic_client():
 def _inr(amount: float) -> str:
     """Format a float as Indian Rupee with lakh/crore suffixes."""
     if amount >= 1e7:
-        return f"₹{amount / 1e7:.2f} Cr"
+        return f"\u20b9{amount / 1e7:.2f} Cr"
     elif amount >= 1e5:
-        return f"₹{amount / 1e5:.2f} L"
+        return f"\u20b9{amount / 1e5:.2f} L"
     else:
-        return f"₹{amount:,.0f}"
+        return f"\u20b9{amount:,.0f}"
 
 
 def _build_client_context_block(client_data: dict) -> str:
-    """
-    Build a structured text block describing the client.
-    client_data keys: name, age, annual_income, monthly_income, dependants,
-                      risk_profile, risk_score
-    """
     return f"""
 CLIENT PROFILE
 ==============
 Name              : {client_data.get('name', 'N/A')}
 Age               : {client_data.get('age', 'N/A')} years
 Annual Income     : {_inr(client_data.get('annual_income', 0))}
-Monthly Income    : {_inr(client_data.get('monthly_income', 0))}
+Monthly Income    : {_inr(client_data.get('monthly_income', client_data.get('annual_income', 0) / 12))}
 Dependants        : {client_data.get('dependants', 0)}
 Risk Profile      : {client_data.get('risk_profile', 'Moderate')}
 Risk Score        : {client_data.get('risk_score', 0)}/100
@@ -95,30 +90,21 @@ Risk Score        : {client_data.get('risk_score', 0)}/100
 
 
 def _build_goals_block(goals: list[dict]) -> str:
-    """
-    goals: list of dicts with keys:
-      name, goal_type, target_amount, years_to_goal, monthly_sip,
-      future_value, adjusted_sip
-    """
     if not goals:
         return "No goals defined."
     lines = ["FINANCIAL GOALS", "=============="]
     for i, g in enumerate(goals, 1):
         lines.append(
-            f"{i}. {g.get('name', 'Goal')} ({g.get('goal_type', '')})\n"
-            f"   Target (today)  : {_inr(g.get('target_amount', 0))}\n"
-            f"   Future Value    : {_inr(g.get('future_value', 0))}\n"
+            f"{i}. {g.get('name', g.get('goal_name', 'Goal'))} ({g.get('type', g.get('goal_type', ''))})\n"
+            f"   Target          : {_inr(g.get('target_amount', g.get('target', 0)))}\n"
+            f"   Future Value    : {_inr(g.get('future_value', g.get('target_amount', 0)))}\n"
             f"   Time Horizon    : {g.get('years_to_goal', 0)} years\n"
-            f"   Monthly SIP     : {_inr(g.get('adjusted_sip', 0))}"
+            f"   Monthly SIP     : {_inr(g.get('adjusted_sip', g.get('monthly_sip', 0)))}"
         )
     return "\n".join(lines)
 
 
 def _build_portfolio_block(portfolio: dict) -> str:
-    """
-    portfolio keys: num_holdings, total_invested, total_current,
-                    absolute_gain, gain_percentage, holdings (list of dicts)
-    """
     if not portfolio or not portfolio.get("num_holdings"):
         return "Portfolio: No holdings yet."
     lines = [
@@ -128,7 +114,7 @@ def _build_portfolio_block(portfolio: dict) -> str:
         f"Total Invested  : {_inr(portfolio['total_invested'])}",
         f"Current Value   : {_inr(portfolio['total_current'])}",
         f"Gain / Loss     : {_inr(portfolio['absolute_gain'])} "
-        f"({portfolio['gain_percentage']:.1f}%)",
+        f"({portfolio.get('gain_pct', portfolio.get('gain_percentage', 0)):.1f}%)",
     ]
     holdings = portfolio.get("holdings", [])
     if holdings:
@@ -136,22 +122,18 @@ def _build_portfolio_block(portfolio: dict) -> str:
         lines.append("Holdings detail:")
         for h in holdings:
             lines.append(
-                f"  • {h.get('scheme_name', 'Unknown')[:50]} — "
-                f"Invested {_inr(h.get('invested_amount', 0))}, "
-                f"Current {_inr(h.get('current_value', 0))}"
+                f"  \u2022 {h.get('name', h.get('scheme_name', 'Unknown'))[:50]} \u2014 "
+                f"Invested {_inr(h.get('invested', h.get('invested_amount', 0)))}, "
+                f"Current {_inr(h.get('current', h.get('current_value', 0)))}"
             )
     return "\n".join(lines)
 
 
 def _build_optimiser_block(opt_result) -> str:
-    """
-    opt_result: OptimiserResult or dict with same fields.
-    """
     if opt_result is None:
         return "Optimiser: Not run."
     if hasattr(opt_result, "summary"):
         return f"OPTIMISER RESULT\n================\n{opt_result.summary()}"
-    # dict fallback
     return f"OPTIMISER RESULT\n================\n{json.dumps(opt_result, indent=2)}"
 
 
@@ -165,8 +147,8 @@ advisory reports for clients.
 Your reports:
 - Are written in clear, professional but warm English
 - Use Indian financial terminology (SIP, corpus, lakh, crore, CAGR, XIRR)
-- Quote all amounts in ₹ with lakh/crore suffixes where appropriate
-- Are grounded in the data provided — never invent numbers
+- Quote all amounts in \u20b9 with lakh/crore suffixes where appropriate
+- Are grounded in the data provided \u2014 never invent numbers
 - Include a brief risk disclaimer at the end (SEBI compliance)
 - Are structured with clear section headings
 
@@ -189,12 +171,12 @@ Please write a complete financial advisory report for the following client.
 
 The report should cover:
 1. Executive Summary (2-3 sentences personalised to the client)
-2. Risk Profile Assessment — explain what {risk_profile} means for this client
-3. Goal Analysis — review each goal, feasibility, and SIP adequacy
-4. Portfolio Review — comment on current holdings, gains, and gaps
-5. Recommended Optimised Allocation — explain the optimiser's suggested weights
+2. Risk Profile Assessment \u2014 explain what {risk_profile} means for this client
+3. Goal Analysis \u2014 review each goal, feasibility, and SIP adequacy
+4. Portfolio Review \u2014 comment on current holdings, gains, and gaps
+5. Recommended Optimised Allocation \u2014 explain the optimiser's suggested weights
    in plain language, and why each fund suits this client's profile
-6. Action Plan — numbered list of 5-7 concrete next steps
+6. Action Plan \u2014 numbered list of 5-7 concrete next steps
 7. Risk Disclaimer (standard SEBI-style, 3-4 lines)
 
 Be concise but complete. Write for a financially literate but non-expert reader.
@@ -202,34 +184,73 @@ Be concise but complete. Write for a financially literate but non-expert reader.
 
 
 def stream_advisory_narrative(
-    client_data: dict,
-    goals: list[dict],
-    portfolio: dict,
+    client_data: dict = None,
+    goals: list = None,
+    portfolio: dict = None,
     opt_result=None,
+    # Phase 5 UI call pattern: single bundled dict
+    client_context: dict = None,
 ) -> Generator[str, None, None]:
     """
     Stream a full advisory narrative for a client.
 
-    Parameters
-    ----------
-    client_data : dict
-        Keys: name, age, annual_income, monthly_income, dependants,
-              risk_profile, risk_score
-    goals : list[dict]
-        Each dict: name, goal_type, target_amount, years_to_goal,
-                   future_value, adjusted_sip
-    portfolio : dict
-        Keys: num_holdings, total_invested, total_current,
-              absolute_gain, gain_percentage, holdings
-    opt_result : OptimiserResult or None
-        Output from optimiser_engine; None if optimiser not run
+    Two supported call patterns:
 
-    Yields
-    ------
-    str : text chunks from the Claude API stream
+    Pattern A (Phase 5 UI):
+        stream_advisory_narrative(client_context={
+            'client': {...},
+            'goals': [...],
+            'portfolio': {...},
+            'performance': {...},
+            'holdings': [...],
+            'report_date': '...',
+            'requested_sections': [...],
+        })
+
+    Pattern B (original / CLI):
+        stream_advisory_narrative(client_data, goals, portfolio, opt_result)
+
+    Yields str chunks from the Claude API stream.
     """
-    client_block  = _build_client_context_block(client_data)
-    goals_block   = _build_goals_block(goals)
+    # --- Unpack Pattern A ---
+    if client_context is not None:
+        client_data = client_context.get("client", {})
+        raw_goals   = client_context.get("goals", [])
+        # Goals from Pattern A are dicts with keys: name, type, target,
+        # target_year, monthly_sip.  Normalise to the standard format.
+        goals = [
+            {
+                "name":          g.get("name") or g.get("goal_name", "Goal"),
+                "goal_type":     g.get("type") or g.get("goal_type", ""),
+                "target_amount": g.get("target") or g.get("target_amount", 0),
+                "future_value":  g.get("target") or g.get("target_amount", 0),
+                "years_to_goal": 0,
+                "adjusted_sip":  g.get("monthly_sip", 0),
+            }
+            for g in raw_goals
+        ]
+        raw_portfolio  = client_context.get("portfolio", {})
+        raw_holdings   = client_context.get("holdings", [])
+        # Merge portfolio totals with holdings detail list
+        portfolio = {
+            **raw_portfolio,
+            "holdings": [
+                {"name": h.get("name"), "invested": h.get("invested", 0), "current": h.get("current", 0)}
+                for h in raw_holdings
+            ],
+        }
+        opt_result = None  # Not passed through Pattern A
+
+    # --- Fallback defaults ---
+    if client_data is None:
+        client_data = {}
+    if goals is None:
+        goals = []
+    if portfolio is None:
+        portfolio = {}
+
+    client_block    = _build_client_context_block(client_data)
+    goals_block     = _build_goals_block(goals)
     portfolio_block = _build_portfolio_block(portfolio)
     optimiser_block = _build_optimiser_block(opt_result)
 
@@ -263,10 +284,7 @@ def get_advisory_narrative(
     portfolio: dict,
     opt_result=None,
 ) -> str:
-    """
-    Non-streaming wrapper. Returns the full advisory as a single string.
-    Useful for CLI demos and tests.
-    """
+    """Non-streaming wrapper. Returns the full advisory as a single string."""
     return "".join(
         stream_advisory_narrative(client_data, goals, portfolio, opt_result)
     )
@@ -278,7 +296,7 @@ CONSTRAINT_SYSTEM_PROMPT = """\
 You are a financial portfolio constraint parser. Your ONLY job is to extract
 numerical constraints from natural-language text and return them as JSON.
 
-Always return a valid JSON object with these exact keys (all optional — omit
+Always return a valid JSON object with these exact keys (all optional \u2014 omit
 keys that are not mentioned):
   min_funds       : int    (minimum number of funds)
   max_funds       : int    (maximum number of funds)
@@ -287,7 +305,7 @@ keys that are not mentioned):
   risk_free_rate  : float  (risk-free rate as decimal, e.g. 0.065)
 
 Rules:
-- Convert percentages to decimals: "25%" → 0.25
+- Convert percentages to decimals: "25%" \u2192 0.25
 - Interpret "at least N funds" as min_funds=N
 - Interpret "no more than N funds" as max_funds=N
 - Return ONLY the JSON object. No explanation, no markdown fences.
@@ -306,17 +324,7 @@ def parse_optimiser_constraints(user_text: str) -> "OptimiserConstraints":
     """
     Parse natural-language constraint instructions into an OptimiserConstraints
     object via Claude.
-
-    Parameters
-    ----------
-    user_text : str
-        e.g. "I want at least 4 funds, max 25% in any single fund"
-
-    Returns
-    -------
-    OptimiserConstraints with extracted values; defaults used for missing keys
     """
-    # Import here to avoid circular dependency in tests
     from engine.optimiser_engine import OptimiserConstraints
 
     client = _get_anthropic_client()
@@ -330,8 +338,6 @@ def parse_optimiser_constraints(user_text: str) -> "OptimiserConstraints":
             messages=[{"role": "user", "content": prompt}],
         )
         raw = response.content[0].text.strip()
-
-        # Strip any accidental markdown fences
         raw = re.sub(r"```(?:json)?", "", raw).strip().rstrip("`").strip()
         parsed = json.loads(raw)
 
@@ -344,7 +350,7 @@ def parse_optimiser_constraints(user_text: str) -> "OptimiserConstraints":
         )
 
     except json.JSONDecodeError as exc:
-        logger.error("Failed to parse constraints JSON: %s | raw=%s", exc, raw)
+        logger.error("Failed to parse constraints JSON: %s", exc)
         return OptimiserConstraints()
     except Exception as exc:
         logger.error("Constraint parsing failed: %s", exc)
@@ -360,68 +366,111 @@ Keep the explanation under 300 words.
 """
 
 EXPLAIN_USER_TEMPLATE = """\
-The portfolio optimiser recommended the following allocation for a client with
-a {risk_profile} risk profile and these goals: {goal_names}.
+A portfolio optimiser produced the following allocation.
 
-Optimiser result:
-{optimiser_summary}
+Optimiser metrics:
+  Expected Return : {ret:.2%}
+  Volatility      : {vol:.2%}
+  Sharpe Ratio    : {sharpe:.2f}
+  Objective       : {objective}
+
+Fund weights:
+{weights_lines}
+
+Fund statistics:
+{fund_stats_lines}
 
 Explain:
-1. Why this mix was chosen (in terms of risk vs. return trade-off)
+1. Why this mix was chosen (risk vs. return trade-off)
 2. The role of each significant fund (>5% weight) in the portfolio
-3. How this allocation suits the client's risk profile and goals
-4. One or two things the client should watch out for
+3. One or two things the client should watch out for
 
 Write directly to the client, starting with "For your portfolio, the optimiser..."
 """
 
 
 def explain_portfolio_optimisation(
-    opt_result,
-    risk_profile: str,
-    goal_names: list[str],
-) -> str:
+    # Pattern A: kwargs from ui/pages/04_optimiser.py
+    optimised_weights: dict = None,
+    portfolio_metrics: dict = None,
+    fund_stats: list = None,
+    constraints: dict = None,
+    objective: str = None,
+    # Pattern B: original positional args
+    opt_result=None,
+    risk_profile: str = None,
+    goal_names: list = None,
+) -> Generator[str, None, None]:
     """
-    Generate a plain-language explanation of the optimiser's output.
+    Generate a plain-language streaming explanation of the optimiser's output.
 
-    Parameters
-    ----------
-    opt_result : OptimiserResult
-    risk_profile : str   e.g. "Aggressive"
-    goal_names : list[str]   e.g. ["Retirement", "Education"]
+    Two call patterns:
 
-    Returns
-    -------
-    str — explanation text (non-streaming)
+    Pattern A (Phase 5 UI — page 04):
+        for chunk in explain_portfolio_optimisation(
+            optimised_weights={...},
+            portfolio_metrics={"return":...,"volatility":...,"sharpe":...},
+            fund_stats=[{"name":...,"return":...,"vol":...},...],
+            constraints={...},
+            objective="max_sharpe",
+        ):
+            ...
+
+    Pattern B (original):
+        text = explain_portfolio_optimisation(opt_result, risk_profile, goal_names)
     """
-    if opt_result is None:
-        return "No optimiser result to explain."
+    # --- Build prompt from Pattern A ---
+    if optimised_weights is not None:
+        metrics = portfolio_metrics or {}
+        ret     = metrics.get("return", 0.0)
+        vol     = metrics.get("volatility", 0.0)
+        sharpe  = metrics.get("sharpe", 0.0)
+        obj_str = objective or "max_sharpe"
 
-    summary = (
-        opt_result.summary()
-        if hasattr(opt_result, "summary")
-        else str(opt_result)
-    )
+        weights_lines = "\n".join(
+            f"  {name}: {w*100:.1f}%"
+            for name, w in sorted(optimised_weights.items(), key=lambda x: x[1], reverse=True)
+        )
+        fs_lines = "\n".join(
+            f"  {f.get('name','?')}: return={f.get('return',0):.1%}, vol={f.get('vol',0):.1%}"
+            for f in (fund_stats or [])
+        )
+        prompt = EXPLAIN_USER_TEMPLATE.format(
+            ret=ret, vol=vol, sharpe=sharpe, objective=obj_str,
+            weights_lines=weights_lines,
+            fund_stats_lines=fs_lines if fs_lines else "  (not available)",
+        )
 
-    prompt = EXPLAIN_USER_TEMPLATE.format(
-        risk_profile=risk_profile,
-        goal_names=", ".join(goal_names) if goal_names else "general wealth creation",
-        optimiser_summary=summary,
-    )
+    # --- Build prompt from Pattern B ---
+    elif opt_result is not None:
+        summary = (
+            opt_result.summary() if hasattr(opt_result, "summary") else str(opt_result)
+        )
+        prompt = (
+            f"Explain this portfolio optimisation result in plain language.\n\n"
+            f"Risk profile: {risk_profile or 'Moderate'}\n"
+            f"Goals: {', '.join(goal_names) if goal_names else 'general wealth creation'}\n\n"
+            f"{summary}\n\n"
+            f"Start with: 'For your portfolio, the optimiser...'"
+        )
+    else:
+        yield "No optimiser result to explain."
+        return
 
     client = _get_anthropic_client()
 
     try:
-        response = client.messages.create(
+        with client.messages.stream(
             model="claude-sonnet-4-20250514",
             max_tokens=512,
             system=EXPLAIN_SYSTEM_PROMPT,
             messages=[{"role": "user", "content": prompt}],
-        )
-        return response.content[0].text.strip()
+        ) as stream:
+            for text_chunk in stream.text_stream:
+                yield text_chunk
     except Exception as exc:
         logger.error("Optimisation explanation failed: %s", exc)
-        return f"[Explanation unavailable: {exc}]"
+        yield f"[Explanation unavailable: {exc}]"
 
 
 # ── CLI demo ──────────────────────────────────────────────────────────────────
@@ -431,7 +480,6 @@ if __name__ == "__main__":
         FundStats, OptimiserConstraints, optimise_max_sharpe,
     )
 
-    # Sample data matching the Phase 2 demo client
     sample_client = {
         "name": "Arjun Mehta",
         "age": 35,
@@ -451,14 +499,6 @@ if __name__ == "__main__":
             "years_to_goal": 25,
             "adjusted_sip": 32_000,
         },
-        {
-            "name": "Daughter's Education",
-            "goal_type": "education",
-            "target_amount": 3_000_000,
-            "future_value": 7_500_000,
-            "years_to_goal": 13,
-            "adjusted_sip": 18_000,
-        },
     ]
 
     sample_portfolio = {
@@ -468,47 +508,28 @@ if __name__ == "__main__":
         "absolute_gain": 130_000,
         "gain_percentage": 10.32,
         "holdings": [
-            {
-                "scheme_name": "Parag Parikh Flexi Cap Fund - Direct Growth",
-                "invested_amount": 660_000,
-                "current_value": 750_000,
-            },
-            {
-                "scheme_name": "Mirae Asset Large Cap Fund - Direct Growth",
-                "invested_amount": 600_000,
-                "current_value": 640_000,
-            },
+            {"scheme_name": "Parag Parikh Flexi Cap", "invested_amount": 660_000, "current_value": 750_000},
         ],
     }
 
     sample_funds = [
-        FundStats(100001, "Parag Parikh Flexi Cap",        0.14, 0.17),
-        FundStats(100002, "Mirae Asset Large Cap",          0.12, 0.15),
-        FundStats(100003, "Axis Small Cap",                0.16, 0.22),
-        FundStats(100004, "HDFC Mid-Cap Opportunities",    0.15, 0.20),
-        FundStats(100005, "ICICI Pru Balanced Advantage",  0.10, 0.10),
+        FundStats(100001, "Parag Parikh Flexi Cap", 0.14, 0.17),
+        FundStats(100002, "Mirae Asset Large Cap",  0.12, 0.15),
+        FundStats(100003, "Axis Small Cap",          0.16, 0.22),
     ]
 
     opt = optimise_max_sharpe(sample_funds)
-    print("\n─── OPTIMISER RESULT ───")
-    print(opt.summary())
+    print("\n\u2500\u2500\u2500 STREAMING ADVISORY NARRATIVE \u2500\u2500\u2500")
+    for chunk in stream_advisory_narrative(sample_client, sample_goals, sample_portfolio, opt):
+        print(chunk, end="", flush=True)
+    print()
 
-    print("\n─── CONSTRAINT PARSER TEST ───")
-    test_text = "I want at least 4 funds, no single fund should exceed 30%"
-    constraints = parse_optimiser_constraints(test_text)
-    print(f"  Parsed: min_funds={constraints.min_funds}, "
-          f"max_funds={constraints.max_funds}, "
-          f"max_weight={constraints.max_weight:.0%}")
-
-    print("\n─── OPTIMISATION EXPLAINER ───")
-    explanation = explain_portfolio_optimisation(
-        opt, "Aggressive", ["Retirement", "Education"]
-    )
-    print(explanation)
-
-    print("\n─── STREAMING ADVISORY NARRATIVE ───")
-    for chunk in stream_advisory_narrative(
-        sample_client, sample_goals, sample_portfolio, opt
+    print("\n\u2500\u2500\u2500 EXPLAIN (Pattern A) \u2500\u2500\u2500")
+    for chunk in explain_portfolio_optimisation(
+        optimised_weights={"Parag Parikh Flexi Cap": 0.5, "Mirae Asset Large Cap": 0.3, "Axis Small Cap": 0.2},
+        portfolio_metrics={"return": 0.13, "volatility": 0.16, "sharpe": 1.2},
+        fund_stats=[{"name": "Parag Parikh", "return": 0.14, "vol": 0.17}],
+        objective="max_sharpe",
     ):
         print(chunk, end="", flush=True)
     print()
