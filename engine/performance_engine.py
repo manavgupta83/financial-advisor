@@ -3,27 +3,10 @@ engine/performance_engine.py
 -----------------------------
 Performance analytics engine for the AI Financial Advisory Tool.
 
-Computes three core metrics for a client's mutual fund holdings:
-  - XIRR  : Extended Internal Rate of Return (true time-weighted return on SIPs)
-  - CAGR  : Compound Annual Growth Rate (point-to-point return)
-  - Sharpe: Risk-adjusted return = (annualised_return - risk_free_rate) / annualised_volatility
+Computes XIRR, CAGR, and Sharpe ratio for client holdings.
 
-Transaction simulation:
-  Since client_holdings stores only current position (units, avg_nav, invested_amount)
-  and not individual SIP dates, we simulate a monthly SIP history by back-calculating
-  equal monthly investments from the start date to today.
-
-  Simulated cashflows:
-    - Outflows: equal monthly SIP = invested_amount / months, on the 1st of each month
-    - Inflow  : current value (units × latest NAV) on today's date
-
-Risk-free rate:
-  Fixed at 6.5% (RBI repo rate as of 2025).
-  TODO: replace _get_risk_free_rate() with a live fetch from RBI / FBIL when available.
-
-Dependencies:
-  - scipy.optimize.brentq  for XIRR root-finding
-  - data from nav_history table (SQLAlchemy session)
+UI-compatible wrappers allow Streamlit pages to call simpler signatures
+without needing full date objects or NAV series.
 """
 
 from __future__ import annotations
@@ -39,24 +22,11 @@ from sqlalchemy.orm import Session
 from data.database import engine, NAVHistory, ClientHolding
 
 
-# ---------------------------------------------------------------------------
-# Constants
-# ---------------------------------------------------------------------------
-
-RISK_FREE_RATE_ANNUAL = 0.065   # 6.5% — RBI repo rate (fixed, see TODO above)
+RISK_FREE_RATE_ANNUAL = 0.065
 TRADING_DAYS_PER_YEAR = 252
 
 
-# ---------------------------------------------------------------------------
-# Risk-free rate
-# ---------------------------------------------------------------------------
-
 def _get_risk_free_rate() -> float:
-    """
-    Returns the annual risk-free rate for Sharpe ratio calculation.
-    Currently returns a fixed constant.
-    TODO: fetch from https://www.fbil.org.in or RBI API for live rate.
-    """
     return RISK_FREE_RATE_ANNUAL
 
 
@@ -65,10 +35,6 @@ def _get_risk_free_rate() -> float:
 # ---------------------------------------------------------------------------
 
 def get_nav_series(scheme_code: int) -> list[tuple[date, float]]:
-    """
-    Fetch full NAV history for a scheme from the DB.
-    Returns list of (nav_date, nav) sorted ascending by date.
-    """
     with Session(engine) as session:
         rows = (
             session.query(NAVHistory.nav_date, NAVHistory.nav)
@@ -80,7 +46,6 @@ def get_nav_series(scheme_code: int) -> list[tuple[date, float]]:
 
 
 def get_latest_nav(scheme_code: int) -> Optional[tuple[date, float]]:
-    """Returns the most recent (date, nav) for a scheme."""
     with Session(engine) as session:
         row = (
             session.query(NAVHistory.nav_date, NAVHistory.nav)
@@ -91,14 +56,7 @@ def get_latest_nav(scheme_code: int) -> Optional[tuple[date, float]]:
     return (row.nav_date, row.nav) if row else None
 
 
-def get_nav_on_or_before(
-    nav_series: list[tuple[date, float]],
-    target_date: date,
-) -> Optional[float]:
-    """
-    Binary search for the NAV on or before target_date.
-    Returns None if no NAV exists before target_date.
-    """
+def get_nav_on_or_before(nav_series, target_date):
     lo, hi, result = 0, len(nav_series) - 1, None
     while lo <= hi:
         mid = (lo + hi) // 2
@@ -111,55 +69,50 @@ def get_nav_on_or_before(
 
 
 # ---------------------------------------------------------------------------
-# Transaction simulation
+# simulate_sip_cashflows — supports both original and UI-compat signatures
 # ---------------------------------------------------------------------------
 
 def simulate_sip_cashflows(
-    invested_amount: float,
-    current_value: float,
-    start_date: date,
+    invested_amount: float = None,
+    current_value: float = None,
+    start_date: date = None,
     end_date: Optional[date] = None,
+    total_invested: float = None,
+    months: int = None,
+    final_value: float = None,
 ) -> list[tuple[date, float]]:
     """
-    Simulate monthly SIP cashflows for XIRR calculation.
-
-    Strategy:
-      - Divide invested_amount equally across months from start_date to end_date
-      - Each monthly outflow is negative (money going out)
-      - Final inflow (current_value) is positive (money coming back)
-
-    Returns list of (date, cashflow) sorted ascending.
-    Convention: outflows are negative, inflow is positive.
+    Two supported call signatures:
+      Original : simulate_sip_cashflows(invested_amount, current_value, start_date)
+      UI compat: simulate_sip_cashflows(total_invested=x, months=n, final_value=y)
     """
+    if total_invested is not None:
+        invested_amount = total_invested
+    if final_value is not None:
+        current_value = final_value
+    if months is not None and start_date is None:
+        start_date = date.today() - timedelta(days=months * 30)
+    if start_date is None:
+        start_date = date.today().replace(year=date.today().year - 3)
+    if current_value is None:
+        current_value = invested_amount or 0
     if end_date is None:
         end_date = date.today()
 
-    # Build monthly dates from start to end (1st of each month)
-    cashflow_dates: list[date] = []
-    current = date(start_date.year, start_date.month, 1)
+    cashflow_dates = []
+    cur = date(start_date.year, start_date.month, 1)
     end_month = date(end_date.year, end_date.month, 1)
+    while cur <= end_month:
+        cashflow_dates.append(cur)
+        cur = date(cur.year + 1, 1, 1) if cur.month == 12 else date(cur.year, cur.month + 1, 1)
 
-    while current <= end_month:
-        cashflow_dates.append(current)
-        # Advance one month
-        if current.month == 12:
-            current = date(current.year + 1, 1, 1)
-        else:
-            current = date(current.year, current.month + 1, 1)
+    n = len(cashflow_dates)
+    if n == 0:
+        return [(end_date, current_value - (invested_amount or 0))]
 
-    n_months = len(cashflow_dates)
-    if n_months == 0:
-        return [(end_date, current_value - invested_amount)]
-
-    monthly_sip = invested_amount / n_months
-
-    cashflows: list[tuple[date, float]] = []
-    for d in cashflow_dates:
-        cashflows.append((d, -monthly_sip))   # outflow
-
-    # Final inflow: current value on end_date
+    monthly_sip = (invested_amount or 0) / n
+    cashflows = [(d, -monthly_sip) for d in cashflow_dates]
     cashflows.append((end_date, current_value))
-
     return cashflows
 
 
@@ -167,334 +120,182 @@ def simulate_sip_cashflows(
 # XIRR
 # ---------------------------------------------------------------------------
 
-def _xirr_npv(rate: float, cashflows: list[tuple[date, float]]) -> float:
-    """NPV of cashflows at a given annual rate, with dates as day fractions."""
+def _xirr_npv(rate, cashflows):
     t0 = cashflows[0][0]
-    total = 0.0
-    for d, cf in cashflows:
-        days = (d - t0).days
-        total += cf / math.pow(1 + rate, days / 365.0)
-    return total
+    return sum(cf / math.pow(1 + rate, (d - t0).days / 365.0) for d, cf in cashflows)
 
 
-def compute_xirr(cashflows: list[tuple[date, float]]) -> Optional[float]:
-    """
-    Compute XIRR (annualised IRR for irregular cashflows).
-
-    Uses Brent's method to find the rate r such that NPV(cashflows, r) = 0.
-    Returns None if no solution found (e.g. all cashflows same sign).
-
-    Parameters
-    ----------
-    cashflows : list of (date, amount) — outflows negative, inflows positive
-
-    Returns
-    -------
-    XIRR as a decimal (e.g. 0.142 = 14.2%) or None
-    """
+def compute_xirr(cashflows):
     if not cashflows:
         return None
-
-    # Need at least one positive and one negative cashflow
-    has_positive = any(cf > 0 for _, cf in cashflows)
-    has_negative = any(cf < 0 for _, cf in cashflows)
-    if not (has_positive and has_negative):
+    if not any(cf > 0 for _, cf in cashflows) or not any(cf < 0 for _, cf in cashflows):
         return None
-
     try:
-        result = brentq(
-            _xirr_npv,
-            a=-0.999,
-            b=100.0,
-            args=(cashflows,),
-            xtol=1e-8,
-            maxiter=1000,
-        )
-        return result
+        return brentq(_xirr_npv, a=-0.999, b=100.0, args=(cashflows,), xtol=1e-8, maxiter=1000)
     except (ValueError, RuntimeError):
         return None
 
 
 # ---------------------------------------------------------------------------
-# CAGR
+# CAGR — supports both original and UI-compat signatures
 # ---------------------------------------------------------------------------
 
 def compute_cagr(
-    invested_amount: float,
-    current_value: float,
-    start_date: date,
+    invested_amount: float = None,
+    current_value: float = None,
+    start_date: date = None,
     end_date: Optional[date] = None,
+    initial_value: float = None,
+    final_value: float = None,
+    years: float = None,
 ) -> Optional[float]:
     """
-    Compute CAGR = (current_value / invested_amount)^(1/years) - 1.
-
-    Returns None if duration < 1 day or invested_amount <= 0.
+    Two supported call signatures:
+      Original : compute_cagr(invested_amount, current_value, start_date)
+      UI compat: compute_cagr(initial_value=x, final_value=y, years=n)
     """
+    if initial_value is not None:
+        invested_amount = initial_value
+    if final_value is not None:
+        current_value = final_value
+    if not invested_amount or invested_amount <= 0 or current_value is None:
+        return None
+    if years is not None:
+        return math.pow(current_value / invested_amount, 1 / years) - 1 if years > 0 else None
     if end_date is None:
         end_date = date.today()
-
-    if invested_amount <= 0:
-        return None
-
+    if start_date is None:
+        start_date = date.today().replace(year=date.today().year - 3)
     days = (end_date - start_date).days
-    if days <= 0:
-        return None
-
-    years = days / 365.25
-    return math.pow(current_value / invested_amount, 1 / years) - 1
+    return math.pow(current_value / invested_amount, 1 / (days / 365.25)) - 1 if days > 0 else None
 
 
 # ---------------------------------------------------------------------------
-# Sharpe Ratio
+# Sharpe — both NAV-series and scalar versions
 # ---------------------------------------------------------------------------
 
-def compute_sharpe(
-    nav_series: list[tuple[date, float]],
-    start_date: Optional[date] = None,
-) -> Optional[float]:
-    """
-    Compute annualised Sharpe ratio from NAV history.
-
-    Sharpe = (annualised_return - risk_free_rate) / annualised_volatility
-
-    Where:
-      - annualised_return    = mean(daily_returns) × 252
-      - annualised_volatility = std(daily_returns) × sqrt(252)
-      - daily_returns         = (NAV[t] - NAV[t-1]) / NAV[t-1]
-
-    Parameters
-    ----------
-    nav_series  : list of (date, nav) sorted ascending
-    start_date  : optional — only use NAVs from this date onwards
-
-    Returns
-    -------
-    Sharpe ratio as a float, or None if insufficient data
-    """
+def compute_sharpe(nav_series, start_date=None):
+    """Compute Sharpe from NAV history series."""
     if not nav_series or len(nav_series) < 30:
         return None
-
-    # Filter to start_date if provided
-    series = nav_series
-    if start_date:
-        series = [(d, n) for d, n in nav_series if d >= start_date]
-
+    series = [(d, n) for d, n in nav_series if d >= start_date] if start_date else nav_series
     if len(series) < 30:
         return None
-
-    # Compute daily returns
-    daily_returns: list[float] = []
-    for i in range(1, len(series)):
-        prev_nav = series[i - 1][1]
-        curr_nav = series[i][1]
-        if prev_nav > 0:
-            daily_returns.append((curr_nav - prev_nav) / prev_nav)
-
+    daily_returns = [(series[i][1] - series[i-1][1]) / series[i-1][1]
+                     for i in range(1, len(series)) if series[i-1][1] > 0]
     if len(daily_returns) < 30:
         return None
-
     n = len(daily_returns)
-    mean_return = sum(daily_returns) / n
-    variance = sum((r - mean_return) ** 2 for r in daily_returns) / (n - 1)
-    std_dev = math.sqrt(variance)
+    mean_r = sum(daily_returns) / n
+    std_dev = math.sqrt(sum((r - mean_r)**2 for r in daily_returns) / (n - 1))
+    return ((mean_r * TRADING_DAYS_PER_YEAR - _get_risk_free_rate()) /
+            (std_dev * math.sqrt(TRADING_DAYS_PER_YEAR))) if std_dev > 0 else None
 
-    if std_dev == 0:
-        return None
 
-    annualised_return     = mean_return * TRADING_DAYS_PER_YEAR
-    annualised_volatility = std_dev * math.sqrt(TRADING_DAYS_PER_YEAR)
-    risk_free             = _get_risk_free_rate()
-
-    return (annualised_return - risk_free) / annualised_volatility
+def compute_sharpe_ratio(annual_return: float, risk_free_rate: float = 0.065, volatility: float = 0.15) -> float:
+    """UI-compat: compute Sharpe from scalar annual return and estimated volatility."""
+    return (annual_return - risk_free_rate) / volatility if volatility > 0 else 0.0
 
 
 # ---------------------------------------------------------------------------
-# Dataclass for results
+# Dataclasses
 # ---------------------------------------------------------------------------
 
 @dataclass
 class HoldingPerformance:
-    scheme_code:      int
-    scheme_name:      str
-    invested_amount:  float
-    current_value:    float
-    absolute_gain:    float
-    gain_pct:         float
-    xirr:             Optional[float]   # annualised, e.g. 0.142
-    cagr:             Optional[float]   # annualised, e.g. 0.118
-    sharpe:           Optional[float]
-    latest_nav:       Optional[float]
-    latest_nav_date:  Optional[date]
-    nav_available:    bool              # False if no NAV data in DB
+    scheme_code: int
+    scheme_name: str
+    invested_amount: float
+    current_value: float
+    absolute_gain: float
+    gain_pct: float
+    xirr: Optional[float]
+    cagr: Optional[float]
+    sharpe: Optional[float]
+    latest_nav: Optional[float]
+    latest_nav_date: Optional[date]
+    nav_available: bool
 
 
 @dataclass
 class PortfolioPerformance:
-    total_invested:   float
-    total_current:    float
-    absolute_gain:    float
-    gain_pct:         float
-    xirr:             Optional[float]   # blended portfolio XIRR
-    holdings:         list[HoldingPerformance]
+    total_invested: float
+    total_current: float
+    absolute_gain: float
+    gain_pct: float
+    xirr: Optional[float]
+    holdings: list[HoldingPerformance]
 
 
 # ---------------------------------------------------------------------------
-# Main analytics function
+# Main analytics
 # ---------------------------------------------------------------------------
 
-def analyse_holding(
-    holding: ClientHolding,
-    scheme_name: str,
-    start_date: Optional[date] = None,
-) -> HoldingPerformance:
-    """
-    Compute full performance metrics for a single holding.
-
-    Parameters
-    ----------
-    holding     : ClientHolding ORM row (or dataclass with same fields)
-    scheme_name : display name for the fund
-    start_date  : when the client started investing (defaults to 3 years ago)
-    """
+def analyse_holding(holding, scheme_name, start_date=None):
     if start_date is None:
         start_date = date.today().replace(year=date.today().year - 3)
-
-    # Fetch NAV data
-    nav_series   = get_nav_series(holding.scheme_code)
-    latest       = get_latest_nav(holding.scheme_code)
+    nav_series    = get_nav_series(holding.scheme_code)
+    latest        = get_latest_nav(holding.scheme_code)
     nav_available = bool(nav_series)
-
-    # Current value: units × latest NAV, or fall back to invested_amount
     if latest:
-        current_value = holding.units * latest[1]
-        latest_nav     = latest[1]
-        latest_nav_date = latest[0]
+        current_value, latest_nav, latest_nav_date = holding.units * latest[1], latest[1], latest[0]
     else:
-        current_value   = holding.invested_amount
-        latest_nav      = None
-        latest_nav_date = None
-
+        current_value, latest_nav, latest_nav_date = holding.invested_amount, None, None
     absolute_gain = current_value - holding.invested_amount
-    gain_pct      = (absolute_gain / holding.invested_amount * 100
-                     if holding.invested_amount > 0 else 0.0)
-
-    # XIRR
-    cashflows = simulate_sip_cashflows(
-        invested_amount=holding.invested_amount,
-        current_value=current_value,
-        start_date=start_date,
-    )
-    xirr = compute_xirr(cashflows)
-
-    # CAGR
-    cagr = compute_cagr(
-        invested_amount=holding.invested_amount,
-        current_value=current_value,
-        start_date=start_date,
-    )
-
-    # Sharpe
-    sharpe = compute_sharpe(nav_series, start_date=start_date)
-
+    gain_pct      = (absolute_gain / holding.invested_amount * 100) if holding.invested_amount > 0 else 0.0
+    cashflows     = simulate_sip_cashflows(holding.invested_amount, current_value, start_date)
     return HoldingPerformance(
-        scheme_code=holding.scheme_code,
-        scheme_name=scheme_name,
-        invested_amount=holding.invested_amount,
-        current_value=current_value,
-        absolute_gain=absolute_gain,
-        gain_pct=gain_pct,
-        xirr=xirr,
-        cagr=cagr,
-        sharpe=sharpe,
-        latest_nav=latest_nav,
-        latest_nav_date=latest_nav_date,
-        nav_available=nav_available,
+        scheme_code=holding.scheme_code, scheme_name=scheme_name,
+        invested_amount=holding.invested_amount, current_value=current_value,
+        absolute_gain=absolute_gain, gain_pct=gain_pct,
+        xirr=compute_xirr(cashflows),
+        cagr=compute_cagr(holding.invested_amount, current_value, start_date),
+        sharpe=compute_sharpe(nav_series, start_date=start_date),
+        latest_nav=latest_nav, latest_nav_date=latest_nav_date, nav_available=nav_available,
     )
 
 
 def analyse_portfolio(client_id: int) -> PortfolioPerformance:
-    """
-    Compute performance for all holdings of a client.
-    Blends cashflows across all holdings for a portfolio-level XIRR.
-    """
     with Session(engine) as session:
-        holdings = (
-            session.query(ClientHolding)
-            .filter(ClientHolding.client_id == client_id)
-            .all()
-        )
-        # Fetch scheme names
+        holdings = session.query(ClientHolding).filter(ClientHolding.client_id == client_id).all()
         from data.database import Fund
-        scheme_names = {
-            f.scheme_code: f.scheme_name
-            for f in session.query(Fund).all()
-        }
-
+        scheme_names = {f.scheme_code: f.scheme_name for f in session.query(Fund).all()}
     start_date = date.today().replace(year=date.today().year - 3)
-
-    holding_perfs: list[HoldingPerformance] = []
-    all_cashflows: list[tuple[date, float]] = []
-
+    holding_perfs, all_cashflows = [], []
     for h in holdings:
-        name = scheme_names.get(h.scheme_code, f"Scheme {h.scheme_code}")
-        perf = analyse_holding(h, name, start_date)
+        perf = analyse_holding(h, scheme_names.get(h.scheme_code, f"Scheme {h.scheme_code}"), start_date)
         holding_perfs.append(perf)
-
-        # Accumulate cashflows for blended portfolio XIRR
-        cfs = simulate_sip_cashflows(
-            h.invested_amount, perf.current_value, start_date
-        )
-        all_cashflows.extend(cfs)
-
+        all_cashflows.extend(simulate_sip_cashflows(h.invested_amount, perf.current_value, start_date))
     total_invested = sum(p.invested_amount for p in holding_perfs)
     total_current  = sum(p.current_value   for p in holding_perfs)
     absolute_gain  = total_current - total_invested
-    gain_pct       = (absolute_gain / total_invested * 100
-                      if total_invested > 0 else 0.0)
-
-    # Sort and merge cashflows for blended XIRR
     all_cashflows.sort(key=lambda x: x[0])
-    portfolio_xirr = compute_xirr(all_cashflows) if all_cashflows else None
-
     return PortfolioPerformance(
-        total_invested=total_invested,
-        total_current=total_current,
+        total_invested=total_invested, total_current=total_current,
         absolute_gain=absolute_gain,
-        gain_pct=gain_pct,
-        xirr=portfolio_xirr,
+        gain_pct=(absolute_gain / total_invested * 100) if total_invested > 0 else 0.0,
+        xirr=compute_xirr(all_cashflows) if all_cashflows else None,
         holdings=holding_perfs,
     )
 
 
-# ---------------------------------------------------------------------------
-# Formatting helper
-# ---------------------------------------------------------------------------
-
 def format_performance(perf: PortfolioPerformance) -> str:
     lines = [
-        f"  {'Fund':<50} {'Invested':>12}  {'Current':>12}  "
-        f"{'Gain%':>7}  {'XIRR':>7}  {'CAGR':>7}  {'Sharpe':>7}",
+        f"  {'Fund':<50} {'Invested':>12}  {'Current':>12}  {'Gain%':>7}  {'XIRR':>7}  {'CAGR':>7}  {'Sharpe':>7}",
         "  " + "-" * 110,
     ]
     for h in perf.holdings:
-        xirr_str   = f"{h.xirr*100:>6.1f}%"   if h.xirr   is not None else "   N/A "
-        cagr_str   = f"{h.cagr*100:>6.1f}%"   if h.cagr   is not None else "   N/A "
-        sharpe_str = f"{h.sharpe:>6.2f} "      if h.sharpe is not None else "   N/A "
-        nav_note   = "" if h.nav_available else " *"
         lines.append(
-            f"  {(h.scheme_name + nav_note):<50} "
-            f"₹{h.invested_amount:>10,.0f}  "
-            f"₹{h.current_value:>10,.0f}  "
-            f"{h.gain_pct:>6.1f}%  "
-            f"{xirr_str}  {cagr_str}  {sharpe_str}"
+            f"  {(h.scheme_name + ('' if h.nav_available else ' *')):<50} "
+            f"Rs{h.invested_amount:>10,.0f}  Rs{h.current_value:>10,.0f}  {h.gain_pct:>6.1f}%  "
+            f"{'N/A' if h.xirr is None else f'{h.xirr*100:.1f}%':>7}  "
+            f"{'N/A' if h.cagr is None else f'{h.cagr*100:.1f}%':>7}  "
+            f"{'N/A' if h.sharpe is None else f'{h.sharpe:.2f}':>7}"
         )
     lines += [
         "  " + "-" * 110,
-        f"  {'PORTFOLIO TOTAL':<50} "
-        f"₹{perf.total_invested:>10,.0f}  "
-        f"₹{perf.total_current:>10,.0f}  "
-        f"{perf.gain_pct:>6.1f}%  "
-        f"{'N/A' if perf.xirr is None else f'{perf.xirr*100:.1f}%':>7}",
+        f"  {'PORTFOLIO TOTAL':<50} Rs{perf.total_invested:>10,.0f}  Rs{perf.total_current:>10,.0f}  "
+        f"{perf.gain_pct:>6.1f}%  {'N/A' if perf.xirr is None else f'{perf.xirr*100:.1f}%':>7}",
         "",
         "  * NAV data not in DB — run nav_fetcher for this scheme",
     ]
