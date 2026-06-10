@@ -53,6 +53,7 @@ st.markdown("""
   .alloc-bar { background: #3FB950; border-radius: 4px; height: 8px; }
   .alloc-pct { font-family: 'JetBrains Mono', monospace; font-size: 0.85rem; color: #3FB950; min-width: 50px; text-align: right; }
   .claude-stream { background: #161B22; border: 1px solid #21262D; border-radius: 10px; padding: 1.5rem; margin-top: 1rem; font-size: 0.9rem; line-height: 1.7; }
+  .info-note { background: #161B22; border: 1px solid #30363D; border-left: 3px solid #E3B341; border-radius: 6px; padding: 0.75rem 1rem; font-size: 0.8rem; color: #8B949E; margin-bottom: 1rem; }
   h1,h2,h3 { color: #E6EDF3 !important; }
   .stTextArea > div > div { background: #161B22 !important; border-color: #30363D !important; color: #E6EDF3 !important; }
 </style>
@@ -120,7 +121,8 @@ Describe any constraints in plain English. Examples:<br>
 
 nl_constraints = st.text_area(
     "Your constraints",
-    value="No single fund should exceed 40%. Keep at least 3 funds. Minimum 5% per fund.",
+    value="",
+    placeholder="e.g. No single fund more than 40%. Keep at least 3 funds. Minimum 5% per fund.",
     height=80,
     label_visibility="collapsed",
 )
@@ -137,19 +139,22 @@ parse_btn = st.button("🔍  Parse Constraints with Claude", use_container_width
 parsed_constraints: OptimiserConstraints | None = None
 
 if parse_btn:
-    with st.spinner("Sending to Claude…"):
-        try:
-            parsed_constraints = parse_optimiser_constraints(nl_constraints)
-            st.session_state["parsed_constraints"] = {
-                "min_funds":     parsed_constraints.min_funds,
-                "max_funds":     parsed_constraints.max_funds,
-                "min_weight":    parsed_constraints.min_weight,
-                "max_weight":    parsed_constraints.max_weight,
-                "risk_free_rate":parsed_constraints.risk_free_rate,
-            }
-            st.success("Constraints parsed!")
-        except Exception as e:
-            st.error(f"Claude parse error: {e}")
+    if not nl_constraints.strip():
+        st.warning("Please enter your constraints before parsing.")
+    else:
+        with st.spinner("Sending to Claude…"):
+            try:
+                parsed_constraints = parse_optimiser_constraints(nl_constraints)
+                st.session_state["parsed_constraints"] = {
+                    "min_funds":     parsed_constraints.min_funds,
+                    "max_funds":     parsed_constraints.max_funds,
+                    "min_weight":    parsed_constraints.min_weight,
+                    "max_weight":    parsed_constraints.max_weight,
+                    "risk_free_rate":parsed_constraints.risk_free_rate,
+                }
+                st.success("Constraints parsed!")
+            except Exception as e:
+                st.error(f"Claude parse error: {e}")
 
 # Show parsed constraints if available
 if "parsed_constraints" in st.session_state:
@@ -170,7 +175,9 @@ risk_free    : {pc['risk_free_rate']*100:.1f}%</pre>
 st.markdown('<div class="section-heading">Step 2 — Run Optimiser</div>', unsafe_allow_html=True)
 
 # Build FundStats from holdings
-# Use simple estimates: expected_return from (current-invested)/invested / 3yr, volatility=15%, correlation=0
+# Expected return derived from actual invested vs current value (CAGR over 3yr).
+# Volatility is estimated at 15% per fund — real volatility requires NAV history
+# which will be used automatically once populated via the nav_fetcher.
 import math
 
 def build_fund_stats(holdings: list[dict]) -> list[FundStats]:
@@ -184,12 +191,21 @@ def build_fund_stats(holdings: list[dict]) -> list[FundStats]:
             scheme_code=h["scheme_code"],
             scheme_name=h["scheme_name"] or str(h["scheme_code"]),
             expected_return=round(er, 4),
-            volatility=0.15,
+            volatility=0.15,       # estimated — replace with NAV-history σ when available
             sharpe_ratio=round((er - 0.065) / 0.15, 2),
         ))
     return stats
 
 fund_stats = build_fund_stats(holdings)
+
+# Show disclaimer about estimated volatility
+st.markdown("""
+<div class="info-note">
+  ⚠️ <strong>Estimated inputs:</strong> Volatility is set to 15% per fund and correlation to 0.3
+  (pair-wise) as NAV history is not yet populated. Returns are derived from your actual
+  invested vs current values. Results will improve automatically once NAV history is fetched.
+</div>
+""", unsafe_allow_html=True)
 
 run_btn = st.button("⚡  Run Optimiser", type="primary", use_container_width=True)
 
@@ -204,7 +220,7 @@ if run_btn:
         risk_free_rate = pc.get("risk_free_rate", 0.065),
     )
 
-    # Correlation matrix (identity for now — no history)
+    # Correlation matrix (0.3 pair-wise — estimated until NAV history is available)
     n = len(fund_stats)
     corr_matrix = [[1.0 if i == j else 0.3 for j in range(n)] for i in range(n)]
 
