@@ -105,11 +105,20 @@ def feasibility_gauge(sip_pct):
     return fig
 
 
+# Maps UI label -> (GoalType enum, normalised slug stored in DB)
+# Slug must match the icon lookup below and the goal_type column values
 GOAL_TYPE_MAP = {
-    "🏖️  Retirement":     GoalType.RETIREMENT,
-    "🎓  Education":      GoalType.EDUCATION,
-    "🏠  House":          GoalType.HOUSE,
-    "🛡️  Emergency Fund": GoalType.EMERGENCY,
+    "🏖️  Retirement":     (GoalType.RETIREMENT, "retirement"),
+    "🎓  Education":      (GoalType.EDUCATION,   "education"),
+    "🏠  House":          (GoalType.HOUSE,       "house"),
+    "🛡️  Emergency Fund": (GoalType.EMERGENCY,   "emergency"),
+}
+
+GOAL_ICON = {
+    "retirement": "🏖️",
+    "education":  "🎓",
+    "house":      "🏠",
+    "emergency":  "🛡️",
 }
 
 st.markdown('<div class="page-title">Goal Planner</div>', unsafe_allow_html=True)
@@ -154,21 +163,34 @@ with tab_add:
         if not goal_name:
             st.error("Goal Name is required.")
             st.stop()
+        goal_enum, goal_slug = GOAL_TYPE_MAP[goal_type_label]
         goal_input = GoalInput(
-            goal_type=GOAL_TYPE_MAP[goal_type_label], name=goal_name,
-            target_amount_today=target_today, years_to_goal=years_to_goal,
-            existing_investment=existing_inv, inflation_rate=inflation_rate/100.0,
-            monthly_expense_at_goal=monthly_expense if monthly_expense > 0 else 0)
+            goal_type=goal_enum,
+            name=goal_name,
+            target_amount_today=target_today,
+            years_to_goal=years_to_goal,
+            existing_investment=existing_inv,
+            inflation_rate=inflation_rate / 100.0,
+            monthly_expense_at_goal=monthly_expense if monthly_expense > 0 else 0
+        )
         plans = plan_all_goals(goals=[goal_input], risk_profile=risk_profile, monthly_income=monthly_income)
         plan  = plans[0]
-        add_goal(client_id=client_id, goal_name=goal_name, goal_type=GOAL_TYPE_MAP[goal_type_label].value,
-                 target_amount=plan.future_value, target_year=date.today().year + years_to_goal,
-                 current_savings=existing_inv, monthly_sip=plan.adjusted_sip, priority=1)
+        # Store normalised slug (retirement/education/house/emergency), NOT GoalType.value
+        add_goal(
+            client_id=client_id,
+            goal_name=goal_name,
+            goal_type=goal_slug,
+            target_amount=plan.future_value,
+            target_year=date.today().year + years_to_goal,
+            current_savings=existing_inv,
+            monthly_sip=plan.adjusted_sip,
+            priority="1",
+        )
         st.success(f"Goal **{goal_name}** saved!")
         r1, r2, r3, r4 = st.columns(4)
-        r1.metric("Future Value", f"₹{plan.future_value/1e5:.2f}L")
-        r2.metric("Required SIP", f"₹{plan.monthly_sip_required:,.0f}/mo")
-        r3.metric("Adjusted SIP", f"₹{plan.adjusted_sip:,.0f}/mo")
+        r1.metric("Future Value",    f"₹{plan.future_value/1e5:.2f}L")
+        r2.metric("Required SIP",    f"₹{plan.monthly_sip_required:,.0f}/mo")
+        r3.metric("Adjusted SIP",    f"₹{plan.adjusted_sip:,.0f}/mo")
         r4.metric("Expected Return", f"{plan.expected_annual_return*100:.1f}% p.a.")
         existing_goals = get_goals_for_client(client_id)
         total_sip = sum(g.monthly_sip or 0 for g in existing_goals)
@@ -179,7 +201,14 @@ with tab_add:
         with fg2:
             status = '✅ Comfortable' if sip_pct < 30 else ('⚠️ Stretching' if sip_pct < 40 else '🔴 Exceeds 40% cap')
             color  = '#3FB950' if sip_pct < 30 else ('#E3B341' if sip_pct < 40 else '#F85149')
-            st.markdown(f"<div style='background:#161B22;border:1px solid #21262D;border-radius:10px;padding:1.25rem;'><div style='font-size:0.7rem;color:#8B949E;text-transform:uppercase;'>SIP Feasibility</div><div style='font-family:JetBrains Mono,monospace;font-size:1.4rem;color:#E6EDF3;'>₹{total_sip:,.0f}/mo</div><div style='font-size:0.82rem;color:#8B949E;margin-top:0.5rem;'>{sip_pct:.1f}% of ₹{monthly_income:,.0f}<br><span style='color:{color};'>{status}</span></div></div>", unsafe_allow_html=True)
+            st.markdown(
+                f"<div style='background:#161B22;border:1px solid #21262D;border-radius:10px;padding:1.25rem;'>"
+                f"<div style='font-size:0.7rem;color:#8B949E;text-transform:uppercase;'>SIP Feasibility</div>"
+                f"<div style='font-family:JetBrains Mono,monospace;font-size:1.4rem;color:#E6EDF3;'>₹{total_sip:,.0f}/mo</div>"
+                f"<div style='font-size:0.82rem;color:#8B949E;margin-top:0.5rem;'>{sip_pct:.1f}% of ₹{monthly_income:,.0f}"
+                f"<br><span style='color:{color};'>{status}</span></div></div>",
+                unsafe_allow_html=True
+            )
         with st.expander("📋 Full goal plan"):
             st.code(format_goal_plan(plan), language=None)
 
@@ -200,6 +229,17 @@ with tab_existing:
             st.metric("Total Future Value", f"₹{sum(g.target_amount or 0 for g in goals)/1e5:.1f}L")
         st.markdown('<div class="section-heading">Goal Breakdown</div>', unsafe_allow_html=True)
         for goal in goals:
-            gtype = goal.goal_type or "goal"
-            icon  = {"retirement":"🏖️","education":"🎓","house":"🏠","emergency":"🛡️"}.get(gtype.lower(), "🎯")
-            st.markdown(f"""<div class="goal-card"><div class="goal-title">{icon} {goal.goal_name or '—'}</div><div class="goal-meta">{gtype.title()} · Target: {goal.target_year or '—'} · Existing: ₹{goal.current_savings or 0:,.0f}</div><div style='display:flex;gap:2rem;margin-top:0.75rem;'><div><div style='font-size:0.65rem;color:#8B949E;text-transform:uppercase;'>Monthly SIP</div><div class='sip-value'>₹{goal.monthly_sip or 0:,.0f}</div></div><div><div style='font-size:0.65rem;color:#8B949E;text-transform:uppercase;'>Future Value</div><div class='fv-value'>₹{(goal.target_amount or 0)/1e5:.2f}L</div></div></div></div>""", unsafe_allow_html=True)
+            gtype = (goal.goal_type or "goal").lower()
+            icon  = GOAL_ICON.get(gtype, "🎯")
+            st.markdown(
+                f'<div class="goal-card">'
+                f'<div class="goal-title">{icon} {goal.goal_name or "—"}</div>'
+                f'<div class="goal-meta">{gtype.title()} · Target: {goal.target_year or "—"} · Existing: ₹{goal.current_savings or 0:,.0f}</div>'
+                f'<div style="display:flex;gap:2rem;margin-top:0.75rem;">'
+                f'<div><div style="font-size:0.65rem;color:#8B949E;text-transform:uppercase;">Monthly SIP</div>'
+                f'<div class="sip-value">₹{goal.monthly_sip or 0:,.0f}</div></div>'
+                f'<div><div style="font-size:0.65rem;color:#8B949E;text-transform:uppercase;">Future Value</div>'
+                f'<div class="fv-value">₹{(goal.target_amount or 0)/1e5:.2f}L</div></div>'
+                f'</div></div>',
+                unsafe_allow_html=True
+            )

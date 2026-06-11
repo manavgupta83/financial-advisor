@@ -1,8 +1,5 @@
 """
 ui/pages/05_advisory_report.py
-
-Phase 5 fix: stream_advisory_narrative() now accepts the single
-client_context dict pattern used here. No other logic changes.
 """
 
 import sys, os
@@ -21,7 +18,7 @@ from engine.performance_engine import compute_cagr, compute_sharpe_ratio, simula
 from ai.claude_advisor import stream_advisory_narrative
 init_db()
 
-st.set_page_config(page_title="Advisory Report", page_icon="\U0001f4c4", layout="wide")
+st.set_page_config(page_title="Advisory Report", page_icon="📄", layout="wide")
 
 st.markdown("""
 <style>
@@ -72,13 +69,13 @@ def _sidebar():
             st.caption("No clients yet.")
         st.divider()
         st.markdown('<p style="font-size:0.7rem;color:#8B949E;text-transform:uppercase;letter-spacing:0.08em;margin-bottom:0.5rem;">Navigation</p>', unsafe_allow_html=True)
-        st.page_link("pages/01_Client_Onboarding.py", label="Client Onboarding", icon="\U0001f9fe")
-        st.page_link("pages/02_Goal_Planner.py",      label="Goal Planner",       icon="\U0001f3af")
-        st.page_link("pages/03_Portfolio.py",          label="Portfolio",          icon="\U0001f4c8")
-        st.page_link("pages/04_Optimiser.py",          label="Optimiser",          icon="\u2699\ufe0f")
-        st.page_link("pages/05_Advisory_Report.py",    label="Advisory Report",    icon="\U0001f4c4")
+        st.page_link("pages/01_Client_Onboarding.py", label="Client Onboarding", icon="🧾")
+        st.page_link("pages/02_Goal_Planner.py",      label="Goal Planner",       icon="🎯")
+        st.page_link("pages/03_Portfolio.py",          label="Portfolio",          icon="📈")
+        st.page_link("pages/04_Optimiser.py",          label="Optimiser",          icon="⚙️")
+        st.page_link("pages/05_Advisory_Report.py",    label="Advisory Report",    icon="📄")
         st.divider()
-        st.markdown('<p style="font-size:0.65rem;color:#30363D;">Phase 5 \u2014 Streamlit UI</p>', unsafe_allow_html=True)
+        st.markdown('<p style="font-size:0.65rem;color:#30363D;">Phase 5 — Streamlit UI</p>', unsafe_allow_html=True)
 
 _sidebar()
 
@@ -111,34 +108,47 @@ def get_holdings(client_id):
 
 
 def build_context(client, goals, holdings):
-    """Assemble the client_context dict for stream_advisory_narrative()."""
-    inv  = sum(h.get("invested_amount", 0) for h in holdings)
-    cur  = sum(h.get("current_value",   0) for h in holdings)
-    cagr = compute_cagr(inv, cur, years=3.0) if inv > 0 else 0.0
-    xirr = None
+    """
+    Build the client_context dict consumed by
+    stream_advisory_narrative(client_context=...).
+
+    Keys that claude_advisor.py reads:
+      client      — flat KYC + risk dict
+      goals       — list of {name, type, target, target_year, monthly_sip}
+      portfolio   — {num_holdings, total_invested, total_current, absolute_gain, gain_pct}
+      performance — {cagr, xirr, sharpe}
+      holdings    — list of {name, invested, current}
+    """
+    inv    = sum(h.get("invested_amount", 0) for h in holdings)
+    cur    = sum(h.get("current_value",   0) for h in holdings)
+    gain   = cur - inv
+    cagr   = compute_cagr(inv, cur, years=3.0) if inv > 0 else 0.0
+    xirr   = None
     try:
-        xirr = compute_xirr(simulate_sip_cashflows(inv, months=36, final_value=cur))
+        xirr = compute_xirr(
+            simulate_sip_cashflows(total_invested=inv, months=36, final_value=cur)
+        )
     except Exception:
         pass
-    sharpe = compute_sharpe_ratio(cagr, risk_free_rate=0.065, volatility=0.15)
-    gain   = cur - inv
+    sharpe = compute_sharpe_ratio(cagr or 0.0, risk_free_rate=0.065, volatility=0.15)
+
     return {
         "client": {
-            "name":           client.get("name"),
-            "age":            client.get("age"),
-            "annual_income":  client.get("annual_income"),
-            "monthly_income": (client.get("annual_income") or 0) / 12,
-            "dependants":     client.get("dependants"),
-            "risk_profile":   client.get("risk_profile"),
-            "risk_score":     client.get("risk_score"),
+            "name":          client.get("name"),
+            "age":           client.get("age"),
+            "annual_income": client.get("annual_income"),
+            "dependants":    client.get("dependants"),
+            "risk_profile":  client.get("risk_profile"),
+            "risk_score":    client.get("risk_score"),
         },
+        # Goals: use keys that claude_advisor._build_goals_block() expects
         "goals": [
             {
                 "name":        g.goal_name,
-                "type":        g.goal_type,
-                "target":      g.target_amount,
+                "type":        g.goal_type or "goal",
+                "target":      g.target_amount or 0,
                 "target_year": g.target_year,
-                "monthly_sip": g.monthly_sip,
+                "monthly_sip": g.monthly_sip or 0,
             }
             for g in goals
         ],
@@ -147,14 +157,19 @@ def build_context(client, goals, holdings):
             "total_invested": inv,
             "total_current":  cur,
             "absolute_gain":  gain,
-            "gain_pct":       (gain / inv * 100) if inv > 0 else 0,
+            "gain_pct":       (gain / inv * 100) if inv > 0 else 0.0,
         },
-        "performance": {"cagr": cagr, "xirr": xirr, "sharpe": sharpe},
+        "performance": {
+            "cagr":   cagr,
+            "xirr":   xirr,
+            "sharpe": sharpe,
+        },
+        # Holdings: keys that _build_portfolio_block() resolves via .get()
         "holdings": [
             {
                 "name":     h.get("scheme_name"),
-                "invested": h.get("invested_amount"),
-                "current":  h.get("current_value"),
+                "invested": h.get("invested_amount", 0),
+                "current":  h.get("current_value",   0),
             }
             for h in holdings
         ],
@@ -163,7 +178,7 @@ def build_context(client, goals, holdings):
 
 
 st.markdown('<div class="page-title">Advisory Report</div>', unsafe_allow_html=True)
-st.markdown('<div class="page-sub">Claude generates a personalised financial advisory narrative \u2014 streamed live.</div>', unsafe_allow_html=True)
+st.markdown('<div class="page-sub">Claude generates a personalised financial advisory narrative — streamed live.</div>', unsafe_allow_html=True)
 
 client_id = st.session_state.get("selected_client_id")
 if not client_id:
@@ -180,44 +195,41 @@ if not client:
 st.markdown('<div class="section-heading">Report Context</div>', unsafe_allow_html=True)
 cc1, cc2, cc3, cc4 = st.columns(4)
 cc1.markdown(f'<div class="context-card"><div class="context-label">Client</div><div class="context-value">{client["name"]}</div></div>', unsafe_allow_html=True)
-cc2.markdown(f'<div class="context-card"><div class="context-label">Risk Profile</div><div class="context-value">{client.get("risk_profile", "\u2014")}</div></div>', unsafe_allow_html=True)
+cc2.markdown(f'<div class="context-card"><div class="context-label">Risk Profile</div><div class="context-value">{client.get("risk_profile","—")}</div></div>', unsafe_allow_html=True)
 cc3.markdown(f'<div class="context-card"><div class="context-label">Goals</div><div class="context-value">{len(goals)} defined</div></div>', unsafe_allow_html=True)
 cc4.markdown(f'<div class="context-card"><div class="context-label">Holdings</div><div class="context-value">{len(holdings)} funds</div></div>', unsafe_allow_html=True)
-
-with st.expander("\u2699\ufe0f Customise report (optional)"):
-    include_sections = st.multiselect("Sections to include",
-        ["Executive Summary","Risk Profile Analysis","Goal Review","Portfolio Health",
-         "Fund Recommendations","Tax Planning","Action Items"],
-        default=["Executive Summary","Risk Profile Analysis","Goal Review",
-                 "Portfolio Health","Fund Recommendations","Action Items"])
 
 report_ph   = st.empty()
 download_ph = st.empty()
 
-if st.button("\U0001f4c4  Generate Advisory Report", type="primary", use_container_width=True):
-    context = build_context(client, goals, holdings)
-    context["requested_sections"] = include_sections
+if st.button("📄  Generate Advisory Report", type="primary", use_container_width=True):
+    context     = build_context(client, goals, holdings)
     full_report = ""
-    report_ph.markdown('<div class="report-container"><em style="color:#8B949E;">Generating\u2026</em></div>', unsafe_allow_html=True)
+    report_ph.markdown('<div class="report-container"><em style="color:#8B949E;">Generating…</em></div>', unsafe_allow_html=True)
     try:
-        # stream_advisory_narrative accepts client_context= keyword (Phase 5 fix)
         for chunk in stream_advisory_narrative(client_context=context):
             full_report += chunk
-            report_ph.markdown(f'<div class="report-container">{full_report}</div>', unsafe_allow_html=True)
-        st.session_state["last_report"] = full_report
+            report_ph.markdown(
+                f'<div class="report-container">{full_report}</div>',
+                unsafe_allow_html=True
+            )
+        st.session_state["last_report"]        = full_report
         st.session_state["last_report_client"] = client["name"]
     except Exception as e:
         report_ph.error(f"Streaming error: {e}")
 elif "last_report" in st.session_state:
-    st.caption(f"\U0001f4c4 Last report for **{st.session_state.get('last_report_client', '\u2014')}**. Click Generate to refresh.")
-    report_ph.markdown(f'<div class="report-container">{st.session_state["last_report"]}</div>', unsafe_allow_html=True)
+    st.caption(f"📄 Last report for **{st.session_state.get('last_report_client','—')}**. Click Generate to refresh.")
+    report_ph.markdown(
+        f'<div class="report-container">{st.session_state["last_report"]}</div>',
+        unsafe_allow_html=True
+    )
 
 if "last_report" in st.session_state:
     name_safe = (st.session_state.get("last_report_client") or "report").replace(" ", "_")
     download_ph.download_button(
-        label="\u2b07\ufe0f  Download as Markdown",
+        label="⬇️  Download as Markdown",
         data=st.session_state["last_report"],
         file_name=f"advisory_{name_safe}_{date.today().isoformat()}.md",
         mime="text/markdown",
-        use_container_width=True,
+        use_container_width=True
     )
