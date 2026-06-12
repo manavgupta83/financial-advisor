@@ -1,9 +1,19 @@
 """
 engine/overlap_engine.py
 -------------------------
-Portfolio overlap analyser.
+Portfolio overlap analyser — two distinct engines:
+
+1. Pairwise fund overlap (original Phase 3 engine)
+   - compute_overlap(scheme_a, scheme_b) → FundOverlap
+   - compute_overlap_matrix() → dict for UI heatmap
+   Answers: how similar are two funds? (sum of min weights)
+
+2. Stock-level weighted corpus exposure (new — scope 3.5 / 1.6)
+   - compute_stock_exposure() → delegates to stock_exposure_engine.py
+   Answers: what is my true ₹ exposure per stock across my entire corpus?
+
 UI-compatible wrapper compute_overlap_matrix(scheme_codes, db_path=None)
-added at the bottom.
+is retained for backward compatibility with 03_portfolio.py.
 """
 
 from __future__ import annotations
@@ -116,20 +126,19 @@ def compute_overlap(scheme_code_a: int, scheme_code_b: int) -> FundOverlap:
 
 def compute_overlap_matrix(
     scheme_codes: list[int],
-    db_path: str = None,          # UI-compat kwarg (ignored — uses SQLAlchemy engine)
-    portfolio_weights: dict = None,  # UI-compat kwarg (ignored)
+    db_path: str = None,
+    portfolio_weights: dict = None,
 ) -> dict[tuple[int, int], float]:
     """
     UI-compatible wrapper.
     Returns dict {(code_a, code_b): overlap_pct} for all pairs.
-    (The UI indexes this as overlap_matrix.get((sc1, sc2), 0.0).)
     """
     matrix: dict[tuple[int, int], float] = {}
     for i in range(len(scheme_codes)):
         for j in range(i + 1, len(scheme_codes)):
             a, b = scheme_codes[i], scheme_codes[j]
             overlap = compute_overlap(a, b)
-            matrix[(a, b)] = overlap.overlap_pct / 100  # UI multiplies by 100 itself
+            matrix[(a, b)] = overlap.overlap_pct / 100
             matrix[(b, a)] = overlap.overlap_pct / 100
     return matrix
 
@@ -148,6 +157,29 @@ def compute_overlap_matrix_full(scheme_codes: list[int]) -> OverlapMatrix:
     return OverlapMatrix(scheme_codes=scheme_codes, scheme_names=scheme_names, matrix=matrix, details=details)
 
 
+def compute_stock_exposure(
+    holdings: list[dict],
+    redundancy_threshold: float = 0.05,
+):
+    """
+    Compute stock-level and sector-level weighted ₹ exposure across a client's corpus.
+    Delegates to engine/stock_exposure_engine.py.
+
+    Parameters
+    ----------
+    holdings : list of dicts with keys:
+        scheme_code (int), scheme_name (str), corpus_inr (float)
+    redundancy_threshold : float
+        Combined weight threshold for redundancy flagging (default 5%)
+
+    Returns
+    -------
+    PortfolioExposureResult from stock_exposure_engine
+    """
+    from engine.stock_exposure_engine import compute_portfolio_exposure
+    return compute_portfolio_exposure(holdings, redundancy_threshold)
+
+
 def format_overlap(overlap: FundOverlap, top_n: int = 10) -> str:
     lines = [
         f"  Fund A : {overlap.scheme_name_a}",
@@ -155,7 +187,7 @@ def format_overlap(overlap: FundOverlap, top_n: int = 10) -> str:
         f"  Overlap: {overlap.overlap_pct:.1f}%",
     ]
     if overlap.warning:
-        lines.append(f"  ⚠  {overlap.warning}")
+        lines.append(f"  \u26a0  {overlap.warning}")
     for s in overlap.common_stocks[:top_n]:
         lines.append(f"  {s.stock_name:<40} A:{s.weight_a:.2f}%  B:{s.weight_b:.2f}%  min:{s.min_weight:.2f}%")
     return "\n".join(lines)

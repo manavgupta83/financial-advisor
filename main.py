@@ -3,14 +3,16 @@ main.py
 --------
 Entry point for the AI Financial Advisory Tool.
 
-Phase 2 CLI:
-  - Demonstrate a complete client onboarding flow end-to-end:
-      1. Create a sample client
-      2. Run the risk questionnaire (auto-answered for demo)
-      3. Define four goals (Retirement, Education, Emergency, House)
-      4. Plan each goal (SIP + FV)
-      5. Generate fund recommendations per goal
-      6. Print a full advisory report to stdout
+Phase 2-5 CLI:
+  - Demonstrate a complete client onboarding flow end-to-end
+
+New modules available (scope v3 additions — not yet wired into demo flow):
+  - engine/stock_exposure_engine.py  — stock-level weighted ₹ corpus exposure
+  - agents/statement_ingestion_agent.py — CAS/AMC statement parser + XIRR
+  - agents/fund_summary_agent.py     — quarterly AI fund summaries
+  - fetchers/scheduler.py            — APScheduler cron (NAV/holdings/summaries)
+  - ui/pages/06_holdings_upload.py   — statement upload UI
+  - ui/pages/07_fund_discovery.py    — fund screener + factsheet UI
 
 Run:
   PYTHONPATH=/Users/manavgupta/financial_advisor python main.py
@@ -41,21 +43,6 @@ from engine.goal_engine import (
 from engine.recommendation_engine import (
     recommend_all_goals, format_recommendation
 )
-
-
-# ---------------------------------------------------------------------------
-# Normalised goal-type slugs stored in DB
-# (must match GOAL_TYPE_MAP slugs in 02_goal_planner.py and icon lookups)
-# ---------------------------------------------------------------------------
-GOAL_SLUG = {
-    GoalType.RETIREMENT: "retirement",
-    GoalType.EDUCATION:  "education",
-    GoalType.EMERGENCY:  "emergency",
-    GoalType.HOUSE:      "house",
-    GoalType.WEDDING:    "wedding",
-    GoalType.TRAVEL:     "travel",
-    GoalType.CUSTOM:     "custom",
-}
 
 
 # ---------------------------------------------------------------------------
@@ -129,14 +116,14 @@ def section_header(title: str):
 
 def run_demo():
     print()
-    section_header("AI FINANCIAL ADVISORY TOOL  —  Phase 2 Demo")
+    section_header("AI FINANCIAL ADVISORY TOOL  —  Phase 2-5 Demo")
 
     # 1. Init DB
     print("\n[1/5] Initialising database …")
     init_db()
     print(f"      DB path: {DATABASE_PATH}")
 
-    # 2. Create client (clean up if demo was run before)
+    # 2. Create client
     print("\n[2/5] Creating demo client …")
     existing = get_client_by_email(DEMO_CLIENT["email"])
     if existing:
@@ -181,15 +168,15 @@ def run_demo():
     for plan in plans:
         years_to_goal = plan.input.years_to_goal
         target_year   = date.today().year + years_to_goal
-        add_goal(
+        db_goal = add_goal(
             client_id=client.id,
             goal_name=plan.input.name,
-            goal_type=GOAL_SLUG[plan.input.goal_type],
+            goal_type=plan.input.goal_type.value,
             target_amount=plan.future_value,
             target_year=target_year,
             current_savings=plan.input.existing_investment,
             monthly_sip=plan.adjusted_sip,
-            priority="1",
+            priority=1,
         )
         print()
         print(format_goal_plan(plan))
@@ -211,7 +198,7 @@ def run_demo():
         section_header(f"RECOMMENDATION  ›  {rec.goal_name.upper()}")
         print(format_recommendation(rec))
 
-    # 6. Seed sample holdings and show portfolio summary
+    # 6. Sample portfolio snapshot
     print()
     section_header("SAMPLE PORTFOLIO SNAPSHOT")
     add_holding(
@@ -241,9 +228,15 @@ def run_demo():
     print(f"  Gain %          : {summary['gain_percentage']:.2f}%")
 
     divider("═")
-    print("\n  Phase 2 complete. All engines operational.\n")
-    print("  Next → Phase 3: Analytics Engine")
-    print("          (XIRR, CAGR, Sharpe ratio, overlap analyser, sector allocator)\n")
+    print("\n  Phases 1-5 engines complete.")
+    print("\n  New scope v3 modules available:")
+    print("    engine/stock_exposure_engine.py  — stock-level weighted corpus exposure")
+    print("    agents/statement_ingestion_agent.py — CAS statement parser + XIRR")
+    print("    agents/fund_summary_agent.py     — quarterly AI fund summaries")
+    print("    fetchers/scheduler.py            — APScheduler cron infrastructure")
+    print("    ui/pages/06_holdings_upload.py   — statement upload UI")
+    print("    ui/pages/07_fund_discovery.py    — fund screener + factsheet UI")
+    print("\n  Next → Phase 6: FastAPI + Auth layer\n")
     divider("═")
 
 
