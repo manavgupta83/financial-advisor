@@ -1,9 +1,7 @@
 /**
  * app/(app)/dashboard/page.tsx
  * Works for advisor role (current) and investor role (future).
- * Advisor: GET /clients/ -> use data[0].id for all portfolio calls
- * Investor: GET /clients/me -> use own id
- * Note: feasibility pill removed — GET /goals/{id} does not return feasibility
+ * Fixes: deduplicated holdings by scheme_code, removed client ID from advisor strip.
  */
 "use client";
 import { useEffect, useState, useCallback } from "react";
@@ -16,7 +14,7 @@ import {
 import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, Cell } from "recharts";
 import api from "@/lib/api";
 import { getUser } from "@/lib/auth";
-import { Card, HeroCard, Pill, SectionHeader, Spinner, EmptyState, formatINR, formatPct } from "@/components/ui";
+import { Card, HeroCard, SectionHeader, Spinner, EmptyState, formatINR, formatPct } from "@/components/ui";
 import type { Client, PortfolioSummary, Goal, Holding } from "@/types";
 
 interface SectorItem { sector: string; weight: number; }
@@ -32,7 +30,6 @@ function goalIcon(type: string) { return GOAL_ICONS[type] ?? <IconTarget size={1
 export default function DashboardPage() {
   const user = getUser();
   const [client,   setClient]   = useState<Client | null>(null);
-  const [clientId, setClientId] = useState<number | null>(null);
   const [summary,  setSummary]  = useState<PortfolioSummary | null>(null);
   const [goals,    setGoals]    = useState<Goal[]>([]);
   const [sectors,  setSectors]  = useState<SectorItem[]>([]);
@@ -62,8 +59,6 @@ export default function DashboardPage() {
         const clientRes = await api.get(`/clients/${resolvedClientId}`);
         resolvedClient = clientRes.data;
       }
-
-      setClientId(resolvedClientId);
       setClient(resolvedClient);
 
       const [sRes, gRes, secRes, hRes] = await Promise.allSettled([
@@ -77,15 +72,28 @@ export default function DashboardPage() {
       if (gRes.status === "fulfilled") setGoals(gRes.value.data);
       if (secRes.status === "fulfilled") {
         const raw = secRes.value.data;
-        const items: Array<{sector: string; weight_pct: number}> = raw.allocations ?? [];
-        setSectors(
-          items
-            .map(i => ({ sector: i.sector, weight: i.weight_pct }))
-            .sort((a, b) => b.weight - a.weight)
-            .slice(0, 6)
-        );
+        const items = raw.allocations ?? raw;
+        if (Array.isArray(items)) {
+          setSectors(
+            items
+              .map((i: { sector: string; weight_pct?: number; weight?: number }) => ({
+                sector: i.sector,
+                weight: i.weight_pct ?? (i.weight ? i.weight * 100 : 0),
+              }))
+              .sort((a: SectorItem, b: SectorItem) => b.weight - a.weight)
+              .slice(0, 6)
+          );
+        }
       }
-      if (hRes.status === "fulfilled") setHoldings((hRes.value.data as Holding[]).slice(0, 4));
+      if (hRes.status === "fulfilled") {
+        const seen = new Set<number>();
+        const deduped = (hRes.value.data as Holding[]).filter(h => {
+          if (seen.has(h.scheme_code)) return false;
+          seen.add(h.scheme_code);
+          return true;
+        });
+        setHoldings(deduped.slice(0, 4));
+      }
 
     } catch (err: unknown) {
       const msg = (err as { response?: { data?: { detail?: string } } })?.response?.data?.detail;
@@ -228,9 +236,7 @@ export default function DashboardPage() {
           <p style={{ fontSize: 11, color: "var(--color-text-muted)" }}>
             {user?.role === "advisor" ? "Viewing client" : "Your advisor"}
           </p>
-          <p style={{ fontSize: 13, fontWeight: 500 }}>
-            {client?.name ?? "—"} {clientId ? `(ID: ${clientId})` : ""}
-          </p>
+          <p style={{ fontSize: 13, fontWeight: 500 }}>{client?.name ?? "—"}</p>
         </div>
         <button className="btn-secondary" style={{ fontSize: 11, padding: "6px 12px" }}>Request review</button>
       </Card>
