@@ -1,7 +1,6 @@
 /**
  * app/(auth)/login/page.tsx
- * Fixed: FastAPI detail can be string OR Pydantic v2 array [{type,loc,msg,input}]
- * Fixed: send phone as empty string — API requires field, UI stays email-only
+ * Fixed: phone sent as "0000000000" — API requires min 10 chars, UI stays email-only
  */
 "use client";
 import { useState } from "react";
@@ -44,8 +43,7 @@ export default function LoginPage() {
     setError(null);
     setLoading(true);
     try {
-      // phone sent as empty string — API requires the field but UI is email-only
-      const { data } = await api.post("/auth/request-otp", { email, phone: "" });
+      const { data } = await api.post("/auth/request-otp", { email, phone: "0000000000" });
       if (data.otp_dev) setDevOtp(data.otp_dev);
       setStep("otp");
     } catch (err: unknown) {
