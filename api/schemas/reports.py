@@ -50,10 +50,10 @@ class FundScreenerParams(BaseModel):
 class FundSummaryResponse(BaseModel):
     scheme_code: int
     scheme_name: str
-    fund_house: str
-    category: str
+    fund_house: Optional[str]   # NULL in some legacy rows
+    category: Optional[str]     # NULL in some legacy rows
     sub_category: Optional[str]
-    plan_type: str
+    plan_type: Optional[str]    # NULL in some legacy rows
     ai_summary: Optional[str]
 
 
@@ -65,10 +65,10 @@ class NAVHistoryItem(BaseModel):
 class FundFactsheetResponse(BaseModel):
     scheme_code: int
     scheme_name: str
-    fund_house: str
-    category: str
+    fund_house: Optional[str]
+    category: Optional[str]
     sub_category: Optional[str]
-    plan_type: str
+    plan_type: Optional[str]
     ai_summary: Optional[str]
     nav_history: list[NAVHistoryItem]
     top_holdings: list[dict]
