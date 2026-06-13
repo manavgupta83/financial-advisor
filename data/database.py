@@ -10,6 +10,9 @@
 # Scope v3 additions: fund_summaries, overlap_cache, pending_preferences,
 # agent_runs, reports, orders, users (placeholder), advisor_clients (placeholder)
 # + client_holdings tx history columns (isin, scheme_name, purchase_date, purchase_cost, units_bought)
+#
+# Phase 6 fix: added AuditLog ORM model (was in schema docs but missing from code)
+# + otp_issued_at migration for users table
 
 from sqlalchemy import (
     create_engine, Column, Integer, Float, String,
@@ -23,7 +26,7 @@ import logging
 
 logger = logging.getLogger(__name__)
 
-# ── Engine + session ──────────────────────────────────────────────────────────
+# -- Engine + session ---------------------------------------------------------
 DATABASE_URL = f"sqlite:///{DB_PATH}"
 engine       = create_engine(DATABASE_URL, connect_args={"check_same_thread": False})
 SessionLocal = sessionmaker(bind=engine, autocommit=False, autoflush=False)
@@ -39,7 +42,7 @@ def get_db():
         db.close()
 
 
-# ── Table 1: Mutual fund master ───────────────────────────────────────────────
+# -- Table 1: Mutual fund master ----------------------------------------------
 class Fund(Base):
     __tablename__ = "funds"
 
@@ -56,7 +59,7 @@ class Fund(Base):
     holdings     = relationship("FundHolding", back_populates="fund")
 
 
-# ── Table 2: Daily NAV history ────────────────────────────────────────────────
+# -- Table 2: Daily NAV history -----------------------------------------------
 class NAVHistory(Base):
     __tablename__ = "nav_history"
 
@@ -70,7 +73,7 @@ class NAVHistory(Base):
     fund = relationship("Fund", back_populates="nav_records")
 
 
-# ── Table 3: Monthly fund holdings (stocks inside each MF) ───────────────────
+# -- Table 3: Monthly fund holdings (stocks inside each MF) ------------------
 class FundHolding(Base):
     __tablename__ = "fund_holdings"
 
@@ -86,7 +89,7 @@ class FundHolding(Base):
     fund = relationship("Fund", back_populates="holdings")
 
 
-# ── Table 4: Stock sector master ──────────────────────────────────────────────
+# -- Table 4: Stock sector master ---------------------------------------------
 class SectorMap(Base):
     __tablename__ = "sector_map"
 
@@ -99,7 +102,7 @@ class SectorMap(Base):
     source   = Column(String)
 
 
-# ── Table 5: Client profiles ──────────────────────────────────────────────────
+# -- Table 5: Client profiles -------------------------------------------------
 class Client(Base):
     __tablename__ = "clients"
 
@@ -124,7 +127,7 @@ class Client(Base):
     holdings = relationship("ClientHolding", back_populates="client")
 
 
-# ── Table 6: Client goals ─────────────────────────────────────────────────────
+# -- Table 6: Client goals ----------------------------------------------------
 class ClientGoal(Base):
     __tablename__ = "client_goals"
 
@@ -142,7 +145,7 @@ class ClientGoal(Base):
     client = relationship("Client", back_populates="goals")
 
 
-# ── Table 7: Client current holdings ─────────────────────────────────────────
+# -- Table 7: Client current holdings -----------------------------------------
 # Extended with tx history columns for statement ingestion (scope 1.6 / 4.6)
 class ClientHolding(Base):
     __tablename__ = "client_holdings"
@@ -151,20 +154,19 @@ class ClientHolding(Base):
     client_id       = Column(Integer, ForeignKey("clients.id"), nullable=False)
     scheme_code     = Column(Integer, ForeignKey("funds.scheme_code"), nullable=True)
     goal_id         = Column(Integer, ForeignKey("client_goals.id"), nullable=True)
-    isin            = Column(String)          # populated by statement ingestion
-    scheme_name     = Column(String)          # populated by statement ingestion
+    isin            = Column(String)
+    scheme_name     = Column(String)
     units           = Column(Float)
     avg_nav         = Column(Float)
     invested_amount = Column(Float)
-    # Transaction-level fields (populated by statement ingestion agent)
-    purchase_date   = Column(String)          # ISO date string of this specific purchase
-    purchase_cost   = Column(Float)           # ₹ cost of this specific transaction
-    units_bought    = Column(Float)           # units acquired in this transaction
+    purchase_date   = Column(String)
+    purchase_cost   = Column(Float)
+    units_bought    = Column(Float)
 
     client = relationship("Client", back_populates="holdings")
 
 
-# ── Table 8: AI-generated fund summaries (scope 1.4 / 3.8) ───────────────────
+# -- Table 8: AI-generated fund summaries -------------------------------------
 class FundSummary(Base):
     __tablename__ = "fund_summaries"
 
@@ -174,95 +176,95 @@ class FundSummary(Base):
     summary_text   = Column(Text)
     source_doc_url = Column(String)
     generated_at   = Column(DateTime)
-    quarter        = Column(String)   # e.g. "Q2-2026"
+    quarter        = Column(String)
 
 
-# ── Table 9: Cached overlap results (scope 3.5) ───────────────────────────────
+# -- Table 9: Cached overlap results ------------------------------------------
 class OverlapCache(Base):
     __tablename__ = "overlap_cache"
 
-    id                   = Column(Integer, primary_key=True, index=True)
-    client_id            = Column(Integer, ForeignKey("clients.id"), nullable=False)
-    computed_at          = Column(DateTime, default=datetime.utcnow)
-    stock_overlap_json   = Column(Text)   # JSON blob of StockExposure list
-    sector_overlap_json  = Column(Text)   # JSON blob of SectorExposure list
-    redundancy_flags_json= Column(Text)   # JSON blob of redundant stocks
+    id                    = Column(Integer, primary_key=True, index=True)
+    client_id             = Column(Integer, ForeignKey("clients.id"), nullable=False)
+    computed_at           = Column(DateTime, default=datetime.utcnow)
+    stock_overlap_json    = Column(Text)
+    sector_overlap_json   = Column(Text)
+    redundancy_flags_json = Column(Text)
 
 
-# ── Table 10: Pending investor chat preferences (scope 1.5 / 5.2) ─────────────
+# -- Table 10: Pending investor chat preferences ------------------------------
 class PendingPreference(Base):
     __tablename__ = "pending_preferences"
 
-    id                  = Column(Integer, primary_key=True, index=True)
-    client_id           = Column(Integer, ForeignKey("clients.id"), nullable=False)
-    preference_summary  = Column(Text)    # structured summary from chat session
-    session_id          = Column(String)
-    status              = Column(String, default="pending")  # pending / accepted / dismissed
-    advisor_id          = Column(Integer, nullable=True)      # who acted on it
-    created_at          = Column(DateTime, default=datetime.utcnow)
+    id                 = Column(Integer, primary_key=True, index=True)
+    client_id          = Column(Integer, ForeignKey("clients.id"), nullable=False)
+    preference_summary = Column(Text)
+    session_id         = Column(String)
+    status             = Column(String, default="pending")
+    advisor_id         = Column(Integer, nullable=True)
+    created_at         = Column(DateTime, default=datetime.utcnow)
 
 
-# ── Table 11: Agent run observability log (scope 5.3) ─────────────────────────
+# -- Table 11: Agent run observability log ------------------------------------
 class AgentRun(Base):
     __tablename__ = "agent_runs"
 
-    run_id            = Column(String, primary_key=True)   # UUID
-    agent_name        = Column(String, nullable=False)
-    trigger_type      = Column(String)   # scheduled / event / manual
-    client_id         = Column(Integer, nullable=True)
-    inputs_summary    = Column(Text)
-    decision_made     = Column(Text)
-    action_taken      = Column(Text)
-    approval_status   = Column(String, default="not_required")  # not_required / pending / approved / rejected
-    approver_id       = Column(Integer, nullable=True)
-    status            = Column(String, default="complete")  # complete / partial_failure / failed
-    failure_reason    = Column(Text, nullable=True)
-    timestamp         = Column(DateTime, default=datetime.utcnow)
+    run_id          = Column(String, primary_key=True)
+    agent_name      = Column(String, nullable=False)
+    trigger_type    = Column(String)
+    client_id       = Column(Integer, nullable=True)
+    inputs_summary  = Column(Text)
+    decision_made   = Column(Text)
+    action_taken    = Column(Text)
+    approval_status = Column(String, default="not_required")
+    approver_id     = Column(Integer, nullable=True)
+    status          = Column(String, default="complete")
+    failure_reason  = Column(Text, nullable=True)
+    timestamp       = Column(DateTime, default=datetime.utcnow)
 
 
-# ── Table 12: Report archive (scope 2.8) ──────────────────────────────────────
+# -- Table 12: Report archive -------------------------------------------------
 class Report(Base):
     __tablename__ = "reports"
 
     id              = Column(Integer, primary_key=True, index=True)
     client_id       = Column(Integer, ForeignKey("clients.id"), nullable=False)
     advisor_id      = Column(Integer, nullable=True)
-    report_type     = Column(String)   # advisory / periodic_review
-    period          = Column(String)   # e.g. "2026-Q2"
+    report_type     = Column(String)
+    period          = Column(String)
     file_path       = Column(String)
     sent_at         = Column(DateTime, nullable=True)
-    approval_status = Column(String, default="draft")  # draft / approved / sent
+    approval_status = Column(String, default="draft")
     created_at      = Column(DateTime, default=datetime.utcnow)
 
 
-# ── Table 13: Transaction execution placeholder (scope 3.7) ───────────────────
+# -- Table 13: Transaction execution placeholder ------------------------------
 class Order(Base):
     __tablename__ = "orders"
 
     id          = Column(Integer, primary_key=True, index=True)
     client_id   = Column(Integer, ForeignKey("clients.id"), nullable=False)
     scheme_code = Column(Integer, nullable=True)
-    order_type  = Column(String)   # SIP / lumpsum
+    order_type  = Column(String)
     amount      = Column(Float)
-    status      = Column(String, default="placeholder")  # placeholder / pending / executed
+    status      = Column(String, default="placeholder")
     placed_at   = Column(DateTime, nullable=True)
     created_at  = Column(DateTime, default=datetime.utcnow)
 
 
-# ── Table 14: Users — auth placeholder (scope 5.1 / Phase 6) ─────────────────
-# Minimal schema — full JWT + OTP auth built in Phase 6
+# -- Table 14: Users ----------------------------------------------------------
 class User(Base):
     __tablename__ = "users"
 
-    id         = Column(Integer, primary_key=True, index=True)
-    email      = Column(String, unique=True, index=True, nullable=False)
-    phone      = Column(String)
-    role       = Column(String, default="investor")  # investor / advisor / admin
-    otp_hash   = Column(String)
-    created_at = Column(DateTime, default=datetime.utcnow)
+    id            = Column(Integer, primary_key=True, index=True)
+    email         = Column(String, unique=True, index=True, nullable=False)
+    phone         = Column(String)
+    role          = Column(String, default="investor")
+    otp_hash      = Column(String)
+    otp_issued_at = Column(String)   # ISO datetime string — added Phase 6
+    created_at    = Column(DateTime, default=datetime.utcnow)
 
 
-# ── Table 15: Advisor–client relationships placeholder (scope 5.1 / Phase 6) ──
+# -- Table 15: Advisor-client relationships -----------------------------------
 class AdvisorClient(Base):
     __tablename__ = "advisor_clients"
 
@@ -270,28 +272,44 @@ class AdvisorClient(Base):
     advisor_id  = Column(Integer, ForeignKey("users.id"), nullable=False)
     client_id   = Column(Integer, ForeignKey("clients.id"), nullable=False)
     assigned_at = Column(DateTime, default=datetime.utcnow)
-    status      = Column(String, default="active")  # active / inactive
+    status      = Column(String, default="active")
 
     __table_args__ = (UniqueConstraint("advisor_id", "client_id"),)
 
 
-# ── Safe ALTER TABLE migrations for existing databases ────────────────────────
+# -- Table 16: Audit log — immutable compliance trail (Phase 6) ---------------
+class AuditLog(Base):
+    __tablename__ = "audit_log"
+
+    id          = Column(Integer, primary_key=True, index=True)
+    user_id     = Column(Integer, nullable=False)
+    action_type = Column(String, nullable=False)  # risk_override / report_dispatch / etc.
+    entity_type = Column(String, nullable=False)  # client / goal / report / holding
+    entity_id   = Column(Integer, nullable=False)
+    old_value   = Column(Text)
+    new_value   = Column(Text)
+    reason      = Column(Text, nullable=False)    # mandatory — never blank
+    timestamp   = Column(String, nullable=False)  # ISO datetime string
+
+
+# -- Safe ALTER TABLE migrations for existing databases -----------------------
 _MIGRATIONS = [
-    ("clients", "email",          "TEXT"),
-    ("clients", "phone",          "TEXT"),
-    ("clients", "monthly_income", "REAL"),
-    ("clients", "dependants",     "INTEGER DEFAULT 0"),
-    ("clients", "pan",            "TEXT"),
-    ("clients", "risk_profile",   "TEXT"),
-    ("clients", "updated_at",     "TEXT"),
-    ("client_goals", "goal_type",       "TEXT"),
-    ("client_goals", "current_savings", "REAL DEFAULT 0"),
-    # Scope v3 additions — client_holdings tx history
-    ("client_holdings", "isin",          "TEXT"),
-    ("client_holdings", "scheme_name",   "TEXT"),
-    ("client_holdings", "purchase_date", "TEXT"),
-    ("client_holdings", "purchase_cost", "REAL"),
-    ("client_holdings", "units_bought",  "REAL"),
+    ("clients",         "email",          "TEXT"),
+    ("clients",         "phone",          "TEXT"),
+    ("clients",         "monthly_income", "REAL"),
+    ("clients",         "dependants",     "INTEGER DEFAULT 0"),
+    ("clients",         "pan",            "TEXT"),
+    ("clients",         "risk_profile",   "TEXT"),
+    ("clients",         "updated_at",     "TEXT"),
+    ("client_goals",    "goal_type",      "TEXT"),
+    ("client_goals",    "current_savings","REAL DEFAULT 0"),
+    ("client_holdings", "isin",           "TEXT"),
+    ("client_holdings", "scheme_name",    "TEXT"),
+    ("client_holdings", "purchase_date",  "TEXT"),
+    ("client_holdings", "purchase_cost",  "REAL"),
+    ("client_holdings", "units_bought",   "REAL"),
+    # Phase 6 additions
+    ("users",           "otp_issued_at",  "TEXT"),
 ]
 
 
@@ -305,7 +323,7 @@ def _run_migrations():
                 conn.execute(f"ALTER TABLE {table} ADD COLUMN {col} {defn}")
                 logger.info("Migration: added %s.%s", table, col)
             except sqlite3.OperationalError:
-                pass
+                pass  # column already exists — safe to skip
         conn.commit()
         conn.close()
     except Exception as exc:
@@ -318,7 +336,7 @@ def init_db():
     DATA_DIR.mkdir(exist_ok=True)
     Base.metadata.create_all(bind=engine)
     _run_migrations()
-    print(f"\u2705 Database initialised at {DB_PATH}")
+    print(f"Database initialised at {DB_PATH}")
 
 
 if __name__ == "__main__":
