@@ -1,15 +1,58 @@
-streamlit>=1.35.0
-plotly>=5.20.0
-anthropic>=0.25.0
+# ============================================================
+# MF Advisory Platform -- requirements.txt
+# Phase 6 additions marked with # [P6]
+# ============================================================
+
+# --- Core ---
 python-dotenv>=1.0.0
-pandas>=2.0.0
-numpy>=1.26.0
-openpyxl>=3.1.0
-xlrd>=2.0.0
 requests>=2.31.0
+
+# --- Database ---
 SQLAlchemy>=2.0.0
+
+# --- Data & Finance ---
+numpy>=1.26.0
+pandas>=2.1.0
 scipy>=1.11.0
+
+# --- AI ---
+anthropic>=0.25.0
+
+# --- Optimiser ---
 cvxpy>=1.4.0
-clarabel>=0.7.0
+
+# --- Scheduler ---
 APScheduler>=3.10.0
-pdfplumber>=0.11.0
+
+# --- UI (Streamlit -- Phases 1-5, continues alongside API) ---
+streamlit>=1.32.0
+plotly>=5.18.0
+
+# --- Excel / PDF parsing (holdings fetcher + statement ingestion) ---
+openpyxl>=3.1.0
+xlrd>=2.0.1
+pdfplumber>=0.10.0
+
+# ============================================================
+# Phase 6 -- Web Foundation
+# ============================================================
+
+# FastAPI + ASGI server                                        # [P6]
+fastapi>=0.111.0                                               # [P6]
+uvicorn[standard]>=0.29.0                                      # [P6]
+
+# JWT authentication                                           # [P6]
+python-jose[cryptography]>=3.3.0                               # [P6]
+
+# OTP hashing (bcrypt via passlib)                             # [P6]
+passlib[bcrypt]>=1.7.4                                         # [P6]
+
+# Pydantic v2 (FastAPI dependency -- explicit pin)             # [P6]
+pydantic[email]>=2.6.0                                         # [P6]
+
+# OTP delivery stubs -- uncomment when enabling in Phase 8     # [P6]
+# twilio>=8.0.0                                                # [P6]
+# sendgrid>=6.11.0                                             # [P6]
+
+# Multipart form / file upload support for statement uploads   # [P6]
+python-multipart>=0.0.9                                        # [P6]
