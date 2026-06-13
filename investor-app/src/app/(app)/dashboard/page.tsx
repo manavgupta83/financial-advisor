@@ -1,17 +1,9 @@
 /**
  * app/(app)/dashboard/page.tsx
- * -----------------------------
- * Works for BOTH advisor and investor roles.
- *
- * Advisor flow:
- *   1. GET /clients/ -> pick first assigned client
- *   2. Use that client_id for all portfolio/goals/holdings calls
- *
- * Investor flow (future):
- *   1. GET /clients/me -> own profile with client_id
- *   2. Use that client_id
- *
- * All portfolio routes require /{client_id}/ in the URL per Phase 6 API.
+ * Works for advisor role (current) and investor role (future).
+ * Advisor: GET /clients/ -> use data[0].id for all portfolio calls
+ * Investor: GET /clients/me -> use own id
+ * Note: feasibility pill removed — GET /goals/{id} does not return feasibility
  */
 "use client";
 import { useEffect, useState, useCallback } from "react";
@@ -36,12 +28,6 @@ const GOAL_ICONS: Record<string, React.ReactNode> = {
   house:      <IconHome     size={13} />,
 };
 function goalIcon(type: string) { return GOAL_ICONS[type] ?? <IconTarget size={13} />; }
-function feasibilityVariant(f?: string) {
-  if (f === "Feasible")   return "success" as const;
-  if (f === "Stretch")    return "warn" as const;
-  if (f === "Infeasible") return "danger" as const;
-  return "neutral" as const;
-}
 
 export default function DashboardPage() {
   const user = getUser();
@@ -91,18 +77,13 @@ export default function DashboardPage() {
       if (gRes.status === "fulfilled") setGoals(gRes.value.data);
       if (secRes.status === "fulfilled") {
         const raw = secRes.value.data;
-        const items = raw.allocations ?? raw;
-        if (Array.isArray(items)) {
-          setSectors(
-            items
-              .map((i: { sector: string; weight_pct?: number; weight?: number }) => ({
-                sector: i.sector,
-                weight: i.weight_pct ?? (i.weight ? i.weight * 100 : 0),
-              }))
-              .sort((a: SectorItem, b: SectorItem) => b.weight - a.weight)
-              .slice(0, 6)
-          );
-        }
+        const items: Array<{sector: string; weight_pct: number}> = raw.allocations ?? [];
+        setSectors(
+          items
+            .map(i => ({ sector: i.sector, weight: i.weight_pct }))
+            .sort((a, b) => b.weight - a.weight)
+            .slice(0, 6)
+        );
       }
       if (hRes.status === "fulfilled") setHoldings((hRes.value.data as Holding[]).slice(0, 4));
 
@@ -191,10 +172,7 @@ export default function DashboardPage() {
                   <p style={{ fontSize: 11, color: "var(--color-text-muted)" }}>Target {g.target_year} · {formatINR(g.target_amount)}</p>
                 </div>
               </div>
-              <div style={{ textAlign: "right" }}>
-                <p style={{ fontSize: 13, fontWeight: 500, color: "var(--color-accent)" }}>{formatINR(g.monthly_sip)}/mo</p>
-                {g.feasibility && <Pill variant={feasibilityVariant(g.feasibility)} className="mt-1">{g.feasibility}</Pill>}
-              </div>
+              <p style={{ fontSize: 13, fontWeight: 500, color: "var(--color-accent)" }}>{formatINR(g.monthly_sip)}/mo</p>
             </div>
           ))
         }
@@ -234,7 +212,7 @@ export default function DashboardPage() {
               <div style={{ textAlign: "right", flexShrink: 0 }}>
                 <p style={{ fontSize: 13, fontWeight: 500 }}>{formatINR(h.current_value)}</p>
                 <p style={{ fontSize: 11, color: (h.cagr ?? 0) >= 0 ? "var(--color-positive)" : "var(--color-negative)" }}>
-                  {h.cagr !== undefined ? `${formatPct(h.cagr)} CAGR` : "—"}
+                  {h.cagr != null ? `${formatPct(h.cagr)} CAGR` : "—"}
                 </p>
               </div>
             </div>
