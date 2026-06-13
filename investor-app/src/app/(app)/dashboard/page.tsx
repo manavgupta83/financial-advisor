@@ -1,7 +1,7 @@
 /**
  * app/(app)/dashboard/page.tsx
  * Works for advisor role (current) and investor role (future).
- * Fixes: deduplicated holdings by scheme_code, removed client ID from advisor strip.
+ * Hero card: larger greeting (22px), "Current portfolio value" label, colour-coded gain/loss
  */
 "use client";
 import { useEffect, useState, useCallback } from "react";
@@ -14,7 +14,7 @@ import {
 import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, Cell } from "recharts";
 import api from "@/lib/api";
 import { getUser } from "@/lib/auth";
-import { Card, HeroCard, SectionHeader, Spinner, EmptyState, formatINR, formatPct } from "@/components/ui";
+import { Card, HeroCard, Pill, SectionHeader, Spinner, EmptyState, formatINR, formatPct } from "@/components/ui";
 import type { Client, PortfolioSummary, Goal, Holding } from "@/types";
 
 interface SectorItem { sector: string; weight: number; }
@@ -30,6 +30,7 @@ function goalIcon(type: string) { return GOAL_ICONS[type] ?? <IconTarget size={1
 export default function DashboardPage() {
   const user = getUser();
   const [client,   setClient]   = useState<Client | null>(null);
+  const [clientId, setClientId] = useState<number | null>(null);
   const [summary,  setSummary]  = useState<PortfolioSummary | null>(null);
   const [goals,    setGoals]    = useState<Goal[]>([]);
   const [sectors,  setSectors]  = useState<SectorItem[]>([]);
@@ -43,78 +44,46 @@ export default function DashboardPage() {
     try {
       let resolvedClientId: number;
       let resolvedClient: Client;
-
       if (user?.role === "investor") {
         const { data } = await api.get("/clients/me");
         resolvedClient = data;
         resolvedClientId = data.id;
       } else {
         const { data } = await api.get("/clients/");
-        if (!data || data.length === 0) {
-          setError("No clients assigned to your account yet.");
-          setLoading(false);
-          return;
-        }
+        if (!data || data.length === 0) { setError("No clients assigned to your account yet."); setLoading(false); return; }
         resolvedClientId = data[0].id;
         const clientRes = await api.get(`/clients/${resolvedClientId}`);
         resolvedClient = clientRes.data;
       }
+      setClientId(resolvedClientId);
       setClient(resolvedClient);
-
       const [sRes, gRes, secRes, hRes] = await Promise.allSettled([
         api.get(`/portfolio/${resolvedClientId}/summary`),
         api.get(`/goals/${resolvedClientId}`),
         api.get(`/portfolio/${resolvedClientId}/sector-allocation`),
         api.get(`/holdings/${resolvedClientId}`),
       ]);
-
       if (sRes.status === "fulfilled") setSummary(sRes.value.data);
       if (gRes.status === "fulfilled") setGoals(gRes.value.data);
       if (secRes.status === "fulfilled") {
-        const raw = secRes.value.data;
-        const items = raw.allocations ?? raw;
-        if (Array.isArray(items)) {
-          setSectors(
-            items
-              .map((i: { sector: string; weight_pct?: number; weight?: number }) => ({
-                sector: i.sector,
-                weight: i.weight_pct ?? (i.weight ? i.weight * 100 : 0),
-              }))
-              .sort((a: SectorItem, b: SectorItem) => b.weight - a.weight)
-              .slice(0, 6)
-          );
-        }
+        const items = secRes.value.data.allocations ?? [];
+        setSectors(items.map((i: { sector: string; weight_pct: number }) => ({ sector: i.sector, weight: i.weight_pct })).sort((a: SectorItem, b: SectorItem) => b.weight - a.weight).slice(0, 6));
       }
       if (hRes.status === "fulfilled") {
         const seen = new Set<number>();
-        const deduped = (hRes.value.data as Holding[]).filter(h => {
-          if (seen.has(h.scheme_code)) return false;
-          seen.add(h.scheme_code);
-          return true;
-        });
+        const deduped = (hRes.value.data as Holding[]).filter(h => { if (seen.has(h.scheme_code)) return false; seen.add(h.scheme_code); return true; });
         setHoldings(deduped.slice(0, 4));
       }
-
     } catch (err: unknown) {
       const msg = (err as { response?: { data?: { detail?: string } } })?.response?.data?.detail;
       setError(msg || "Could not load portfolio. Make sure the API is running.");
-    } finally {
-      setLoading(false);
-    }
+    } finally { setLoading(false); }
   }, [user?.role]);
 
   useEffect(() => { fetchAll(); }, [fetchAll]);
 
-  if (loading) return (
-    <div style={{ display: "flex", alignItems: "center", justifyContent: "center", height: 256 }}>
-      <Spinner size={28} />
-    </div>
-  );
-
-  if (error) return (
-    <EmptyState icon={<IconTrendingUp />} title="Could not load dashboard" description={error}
-      action={<button onClick={fetchAll} className="btn-primary">Retry</button>} />
-  );
+  if (loading) return (<div style={{ display: "flex", alignItems: "center", justifyContent: "center", height: 256 }}><Spinner size={28} /></div>);
+  if (error)   return (<EmptyState icon={<IconTrendingUp />} title="Could not load dashboard" description={error} action={<button onClick={fetchAll} className="btn-primary">Retry</button>} />);
 
   const gainPositive = (summary?.absolute_gain ?? 0) >= 0;
   const firstName    = client?.name?.split(" ")[0] ?? "there";
@@ -125,13 +94,16 @@ export default function DashboardPage() {
       <HeroCard>
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", flexWrap: "wrap", gap: 16 }}>
           <div>
-            <p style={{ fontSize: 11, opacity: 0.8, marginBottom: 4 }}>Good morning, {firstName}</p>
-            <p style={{ fontSize: 28, fontWeight: 500, letterSpacing: "-0.5px", lineHeight: 1, marginBottom: 8 }}>
+            <p style={{ fontSize: 22, fontWeight: 500, marginBottom: 16 }}>Good morning, {firstName}</p>
+            <p style={{ fontSize: 11, opacity: 0.75, marginBottom: 4, letterSpacing: "0.04em", textTransform: "uppercase" }}>Current portfolio value</p>
+            <p style={{ fontSize: 28, fontWeight: 500, letterSpacing: "-0.5px", lineHeight: 1, marginBottom: 10 }}>
               {formatINR(summary?.total_current ?? 0)}
             </p>
-            <div style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 12, opacity: 0.9 }}>
+            <div style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 12 }}>
               {gainPositive ? <IconTrendingUp size={14} /> : <IconTrendingDown size={14} />}
-              <span>{formatINR(Math.abs(summary?.absolute_gain ?? 0))} &nbsp;·&nbsp; {formatPct(summary?.gain_percentage ?? 0)} overall</span>
+              <span style={{ color: gainPositive ? "#86efac" : "#fca5a5" }}>
+                {gainPositive ? "+" : "-"}{formatINR(Math.abs(summary?.absolute_gain ?? 0))} &nbsp;·&nbsp; {formatPct(summary?.gain_percentage ?? 0)} overall
+              </span>
             </div>
           </div>
           <div style={{ textAlign: "right", display: "flex", flexDirection: "column", alignItems: "flex-end", gap: 8 }}>
@@ -162,15 +134,10 @@ export default function DashboardPage() {
 
       <Card>
         <SectionHeader icon={<IconTarget size={15} />} title="Goals"
-          action={
-            <Link href="/goals" style={{ fontSize: 11, color: "var(--color-accent)", display: "flex", alignItems: "center", gap: 4, textDecoration: "none" }}>
-              Manage <IconArrowRight size={12} />
-            </Link>
-          }
+          action={<Link href="/goals" style={{ fontSize: 11, color: "var(--color-accent)", display: "flex", alignItems: "center", gap: 4, textDecoration: "none" }}>Manage <IconArrowRight size={12} /></Link>}
         />
         {goals.length === 0
-          ? <EmptyState icon={<IconTarget />} title="No goals yet" description="Add your first goal to get a fund recommendation."
-              action={<Link href="/goals" className="btn-primary">Add goal</Link>} />
+          ? <EmptyState icon={<IconTarget />} title="No goals yet" description="Add your first goal to get a fund recommendation." action={<Link href="/goals" className="btn-primary">Add goal</Link>} />
           : goals.map((g) => (
             <div key={g.id} style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "10px 0", borderBottom: "0.5px solid var(--color-border)" }}>
               <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
@@ -205,11 +172,7 @@ export default function DashboardPage() {
       {holdings.length > 0 && (
         <Card>
           <SectionHeader icon={<IconBriefcase size={15} />} title="Holdings"
-            action={
-              <Link href="/holdings" style={{ fontSize: 11, color: "var(--color-accent)", display: "flex", alignItems: "center", gap: 4, textDecoration: "none" }}>
-                View all <IconArrowRight size={12} />
-              </Link>
-            }
+            action={<Link href="/holdings" style={{ fontSize: 11, color: "var(--color-accent)", display: "flex", alignItems: "center", gap: 4, textDecoration: "none" }}>View all <IconArrowRight size={12} /></Link>}
           />
           {holdings.map((h) => (
             <div key={h.id} style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "10px 0", borderBottom: "0.5px solid var(--color-border)" }}>
@@ -233,9 +196,7 @@ export default function DashboardPage() {
           <IconUser size={16} style={{ color: "var(--color-accent)" }} />
         </div>
         <div style={{ flex: 1 }}>
-          <p style={{ fontSize: 11, color: "var(--color-text-muted)" }}>
-            {user?.role === "advisor" ? "Viewing client" : "Your advisor"}
-          </p>
+          <p style={{ fontSize: 11, color: "var(--color-text-muted)" }}>{user?.role === "advisor" ? "Viewing client" : "Your advisor"}</p>
           <p style={{ fontSize: 13, fontWeight: 500 }}>{client?.name ?? "—"}</p>
         </div>
         <button className="btn-secondary" style={{ fontSize: 11, padding: "6px 12px" }}>Request review</button>
