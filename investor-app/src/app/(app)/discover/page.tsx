@@ -1,21 +1,17 @@
 /**
  * app/(app)/discover/page.tsx
- * Fund screener + factsheet drawer with NAV chart, top holdings, AI summary.
+ * Fund screener + factsheet drawer. Plan type toggle, Direct active by default.
  */
 "use client";
 import { useState, useCallback } from "react";
-import {
-  IconSearch, IconChartLine, IconInfoCircle,
-  IconChevronRight, IconSparkles, IconArrowLeft,
-} from "@tabler/icons-react";
+import { IconSearch, IconChartLine, IconInfoCircle, IconChevronRight, IconSparkles, IconArrowLeft } from "@tabler/icons-react";
 import { LineChart, Line, XAxis, YAxis, Tooltip, ResponsiveContainer } from "recharts";
 import api from "@/lib/api";
 import { Card, SectionHeader, Spinner, EmptyState, Pill } from "@/components/ui";
 
 interface FundSummary {
-  scheme_code: number; scheme_name: string;
-  fund_house: string | null; category: string | null;
-  sub_category: string | null; plan_type: string | null; ai_summary: string | null;
+  scheme_code: number; scheme_name: string; fund_house: string | null;
+  category: string | null; sub_category: string | null; plan_type: string | null; ai_summary: string | null;
 }
 interface TopHolding { stock_name: string; isin: string; weight_pct: number; sector: string | null; }
 interface NavPoint { nav_date: string; nav: number; }
@@ -25,7 +21,7 @@ export default function DiscoverPage() {
   const [search,     setSearch]     = useState("");
   const [category,   setCategory]   = useState("");
   const [fundHouse,  setFundHouse]  = useState("");
-  const [planType,   setPlanType]   = useState("");
+  const [planType,   setPlanType]   = useState("Direct"); // Direct active by default
   const [page,       setPage]       = useState(1);
   const [results,    setResults]    = useState<FundSummary[]>([]);
   const [loading,    setLoading]    = useState(false);
@@ -53,8 +49,7 @@ export default function DiscoverPage() {
   async function openFactsheet(code: number) {
     setSelectedCode(code); setFactsheet(null); setFsLoading(true);
     try { const { data } = await api.get(`/funds/${code}`); setFactsheet(data); }
-    catch { setFactsheet(null); }
-    finally { setFsLoading(false); }
+    catch { setFactsheet(null); } finally { setFsLoading(false); }
   }
 
   function closeFactsheet() { setSelectedCode(null); setFactsheet(null); }
@@ -95,11 +90,18 @@ export default function DiscoverPage() {
           </div>
           <div>
             <label style={{ fontSize: 10, color: "var(--color-text-muted)", display: "block", marginBottom: 3 }}>Plan type</label>
-            <select className="input" style={{ fontSize: 12 }} value={planType} onChange={e => setPlanType(e.target.value)}>
-              <option value="">All</option>
-              <option value="Direct">Direct</option>
-              <option value="Regular">Regular</option>
-            </select>
+            <div style={{ display: "flex", background: "#F3F4F6", borderRadius: 20, border: "0.5px solid var(--color-border)", padding: 3 }}>
+              {(["Direct", "Regular"] as const).map(pt => (
+                <button key={pt} onClick={() => setPlanType(pt)}
+                  style={{ flex: 1, padding: "5px 0", borderRadius: 20, border: "none", fontSize: 11, fontWeight: 500,
+                    cursor: "pointer", transition: "all 0.15s",
+                    background: planType === pt ? "var(--color-surface)" : "transparent",
+                    color: planType === pt ? "var(--color-accent)" : "var(--color-text-muted)",
+                    boxShadow: planType === pt ? "0 1px 3px rgba(0,0,0,0.06)" : "none" }}>
+                  {pt}
+                </button>
+              ))}
+            </div>
           </div>
         </div>
       </Card>
@@ -112,9 +114,7 @@ export default function DiscoverPage() {
         <Card>
           <SectionHeader icon={<IconSearch size={15} />} title={`Results (${results.length})`} />
           <div style={{ display: "grid", gridTemplateColumns: "1fr 160px 120px 80px 36px", gap: 8, padding: "6px 0", borderBottom: "0.5px solid var(--color-border)", marginBottom: 4 }}>
-            {["Fund", "Category", "AMC", "Plan", ""].map(h => (
-              <span key={h} style={{ fontSize: 10, color: "var(--color-text-muted)", fontWeight: 500 }}>{h}</span>
-            ))}
+            {["Fund", "Category", "AMC", "Plan", ""].map(h => <span key={h} style={{ fontSize: 10, color: "var(--color-text-muted)", fontWeight: 500 }}>{h}</span>)}
           </div>
           {results.map(f => (
             <div key={f.scheme_code}
