@@ -74,6 +74,22 @@ DEMO_GOALS = [
               target_amount_today=2_500_000, years_to_goal=5, existing_investment=500_000),
 ]
 
+# Sample holdings: invested_amount = units x avg_nav exactly
+# Parag Parikh: 1200 units x 55.00 = 66,000
+# Mirae Asset:   800 units x 75.00 = 60,000
+DEMO_HOLDINGS = [
+    dict(scheme_code=119598,
+         scheme_name="Parag Parikh Flexi Cap Fund - Direct Growth",
+         units=1200.0, avg_nav=55.00,
+         invested_amount=66_000,       # 1200 x 55
+         current_value=78_000),        # 1200 x current NAV ~65
+    dict(scheme_code=120503,
+         scheme_name="Mirae Asset Large Cap Fund - Direct Growth",
+         units=800.0, avg_nav=75.00,
+         invested_amount=60_000,       # 800 x 75
+         current_value=64_000),        # 800 x current NAV ~80
+]
+
 
 def divider(char="-", width=65):
     print(char * width)
@@ -150,12 +166,10 @@ def run_demo():
 
     print()
     section_header("SAMPLE PORTFOLIO SNAPSHOT")
-    add_holding(client_id=client.id, scheme_code=119598,
-                scheme_name="Parag Parikh Flexi Cap Fund - Direct Growth",
-                units=1200.0, avg_nav=55.00, invested_amount=660_000, current_value=750_000)
-    add_holding(client_id=client.id, scheme_code=120503,
-                scheme_name="Mirae Asset Large Cap Fund - Direct Growth",
-                units=800.0, avg_nav=75.00, invested_amount=600_000, current_value=640_000)
+    for h in DEMO_HOLDINGS:
+        add_holding(client_id=client.id, **h)
+        print(f"      Added: {h['scheme_name']}")
+        print(f"             {h['units']} units x Rs {h['avg_nav']:.2f} = Rs {h['invested_amount']:,.0f} invested")
 
     summary = get_portfolio_summary(client.id)
     print(f"  Holdings        : {summary['num_holdings']}")
