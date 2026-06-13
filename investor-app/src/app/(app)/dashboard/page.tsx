@@ -1,7 +1,7 @@
 /**
  * app/(app)/dashboard/page.tsx
  * Works for advisor role (current) and investor role (future).
- * Hero card: larger greeting (22px), "Current portfolio value" label, colour-coded gain/loss
+ * Holdings count: uses deduplicated total, not API summary (which counts duplicates)
  */
 "use client";
 import { useEffect, useState, useCallback } from "react";
@@ -29,14 +29,15 @@ function goalIcon(type: string) { return GOAL_ICONS[type] ?? <IconTarget size={1
 
 export default function DashboardPage() {
   const user = getUser();
-  const [client,   setClient]   = useState<Client | null>(null);
-  const [clientId, setClientId] = useState<number | null>(null);
-  const [summary,  setSummary]  = useState<PortfolioSummary | null>(null);
-  const [goals,    setGoals]    = useState<Goal[]>([]);
-  const [sectors,  setSectors]  = useState<SectorItem[]>([]);
-  const [holdings, setHoldings] = useState<Holding[]>([]);
-  const [loading,  setLoading]  = useState(true);
-  const [error,    setError]    = useState<string | null>(null);
+  const [client,        setClient]        = useState<Client | null>(null);
+  const [clientId,      setClientId]      = useState<number | null>(null);
+  const [summary,       setSummary]       = useState<PortfolioSummary | null>(null);
+  const [goals,         setGoals]         = useState<Goal[]>([]);
+  const [sectors,       setSectors]       = useState<SectorItem[]>([]);
+  const [holdings,      setHoldings]      = useState<Holding[]>([]);
+  const [totalHoldings, setTotalHoldings] = useState(0);
+  const [loading,       setLoading]       = useState(true);
+  const [error,         setError]         = useState<string | null>(null);
 
   const fetchAll = useCallback(async () => {
     setLoading(true);
@@ -46,8 +47,7 @@ export default function DashboardPage() {
       let resolvedClient: Client;
       if (user?.role === "investor") {
         const { data } = await api.get("/clients/me");
-        resolvedClient = data;
-        resolvedClientId = data.id;
+        resolvedClient = data; resolvedClientId = data.id;
       } else {
         const { data } = await api.get("/clients/");
         if (!data || data.length === 0) { setError("No clients assigned to your account yet."); setLoading(false); return; }
@@ -57,12 +57,14 @@ export default function DashboardPage() {
       }
       setClientId(resolvedClientId);
       setClient(resolvedClient);
+
       const [sRes, gRes, secRes, hRes] = await Promise.allSettled([
         api.get(`/portfolio/${resolvedClientId}/summary`),
         api.get(`/goals/${resolvedClientId}`),
         api.get(`/portfolio/${resolvedClientId}/sector-allocation`),
         api.get(`/holdings/${resolvedClientId}`),
       ]);
+
       if (sRes.status === "fulfilled") setSummary(sRes.value.data);
       if (gRes.status === "fulfilled") setGoals(gRes.value.data);
       if (secRes.status === "fulfilled") {
@@ -71,8 +73,13 @@ export default function DashboardPage() {
       }
       if (hRes.status === "fulfilled") {
         const seen = new Set<number>();
-        const deduped = (hRes.value.data as Holding[]).filter(h => { if (seen.has(h.scheme_code)) return false; seen.add(h.scheme_code); return true; });
-        setHoldings(deduped.slice(0, 4));
+        const deduped = (hRes.value.data as Holding[]).filter(h => {
+          if (seen.has(h.scheme_code)) return false;
+          seen.add(h.scheme_code);
+          return true;
+        });
+        setTotalHoldings(deduped.length);   // full deduplicated count for the metric card
+        setHoldings(deduped.slice(0, 4));   // only top 4 shown in preview
       }
     } catch (err: unknown) {
       const msg = (err as { response?: { data?: { detail?: string } } })?.response?.data?.detail;
@@ -120,7 +127,7 @@ export default function DashboardPage() {
       <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 12 }}>
         {[
           { icon: <IconCoins size={13} />,    label: "Invested",  val: formatINR(summary?.total_invested ?? 0) },
-          { icon: <IconStack2 size={13} />,   label: "Holdings",  val: `${summary?.num_holdings ?? 0} funds` },
+          { icon: <IconStack2 size={13} />,   label: "Holdings",  val: `${totalHoldings} fund${totalHoldings !== 1 ? "s" : ""}` },
           { icon: <IconCalendar size={13} />, label: "NAV date",  val: new Date().toLocaleDateString("en-IN", { day: "numeric", month: "short", year: "numeric" }) },
         ].map(({ icon, label, val }) => (
           <Card key={label}>
