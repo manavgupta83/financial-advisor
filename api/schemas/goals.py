@@ -36,7 +36,7 @@ class GoalPlanResponse(BaseModel):
     adjusted_sip: float
     lumpsum_required: float
     feasibility: str
-    feasibility_notes: str
+    feasibility_notes: list[str]   # engine returns list[str] -- was incorrectly str
     expected_annual_return: float
     years_to_goal: int
 
